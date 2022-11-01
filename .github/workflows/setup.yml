@@ -1,0 +1,77 @@
+name: Setup
+
+on:
+  workflow_call:
+    inputs:
+      python:
+        required: true
+        type: string
+      os:
+        required: true
+        type: string
+      command:
+        required: true
+        type: string
+
+env:
+  WIN_GRAPHVIZ_URL: "https://gitlab.com/graphviz/graphviz/-/package_files/6164164/download"
+  WIN_GRAPHVIZ_EXE: "C:\\Temp\\graphviz-install-2.46.0-win64.exe"
+  WIN_GRAPHVIZ_DIR: "C:\\Program Files\\Graphviz"
+  POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
+
+jobs:
+  setup:
+    runs-on: ${{ inputs.os }}
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install poetry
+        run: make poetry-install
+
+      - name: Set up poetry path (windows)
+        if: inputs.os == 'windows-latest'
+        run: echo "C:\Users\runneradmin\AppData\Roaming\Python\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Set up poetry path (macos)
+        if: inputs.os == 'macos-latest'
+        run: echo "/Users/runner/.local/bin" >> $GITHUB_PATH
+
+      - name: Set up poetry path (linux)
+        if: inputs.os == 'ubuntu-latest'
+        run: echo "/home/runner/.local/bin" >> $GITHUB_PATH
+
+      - name: Set up graphviz (windows)
+        if: inputs.os == 'windows-latest'
+        run:
+          Invoke-WebRequest -Uri $env:WIN_GRAPHVIZ_URL -OutFile $env:WIN_GRAPHVIZ_EXE;
+          Start-Process -Wait -FilePath $env:WIN_GRAPHVIZ_EXE -ArgumentList '/S' -PassThru;
+          echo "$($env:WIN_GRAPHVIZ_DIR)\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Set up graphviz (macos)
+        if: inputs.os == 'macos-latest'
+        run: brew install graphviz
+
+      - name: Set up graphviz (linux)
+        if: inputs.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install graphviz graphviz-dev
+
+      - name: Set up Python ${{ inputs.python }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ inputs.python }}
+          cache: "poetry"
+
+      - name: Install pygraphviz (windows)
+        if: inputs.os == 'windows-latest'
+        run:
+          poetry run python -m pip install pygraphviz==1.10 --no-cache-dir --global-option=build_ext `
+          --global-option="-I$($env:WIN_GRAPHVIZ_DIR)\include" `
+          --global-option="-L$($env:WIN_GRAPHVIZ_DIR)\lib"
+
+      - name: Run install
+        run: |
+          make install
+
+      - name: Command
+        run: ${{ inputs.command }}
+        shell: bash

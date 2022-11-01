@@ -1,0 +1,170 @@
+# Poetry pyproject.toml: https://python-poetry.org/docs/pyproject/
+[build-system]
+requires = ["poetry_core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "graphtask"
+version = "0.0.1"
+description = "Build implicit task graphs from functions and process them in parallel."
+readme = "README.md"
+authors = ["David Muhr <muhrdavid+github@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/davnn/graphtask"
+homepage = "https://github.com/davnn/graphtask"
+
+# Keywords description https://python-poetry.org/docs/pyproject/#keywords
+keywords = []
+
+# Pypi classifiers: https://pypi.org/classifiers/
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Utilities",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Education",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3 :: Only",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX",
+  "Operating System :: Unix",
+  "Operating System :: MacOS",
+  "Typing :: Typed"
+]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+networkx = { version = "^2.8.7" }
+joblib = { version = "^1.1.1" }
+stackeddag = { version = "^0.3.3" }
+pygraphviz = { version = "1.10", optional = true }
+
+[tool.poetry.dev-dependencies]
+bandit = "^1.7.4"
+black = { version = "^22.10.0", allow-prereleases = true }
+isort = { extras = ["colors"], version = "^5.10.1" }
+darglint = "^1.8.1"
+typing-extensions = "^4.3.0"
+pre-commit = "^2.20.0"
+pydocstyle = "^6.1.1"
+pylint = "^2.15.4"
+pyupgrade = "^3.1.0"
+safety = "^2.3.1"
+coverage = "^6.5.0"
+coverage-badge = "^1.1.0"
+pytest = "^7.1.3"
+pytest-html = "^3.1.1"
+pytest-cov = "^4.0.0"
+pyright = "^1.1.275"
+notebook = "^6.5.1"
+hypothesis = "^6.56.4"
+poethepoet = "^0.16.4"
+
+[tool.poetry.extras]
+visualize = [
+  "pygraphviz"
+]
+
+[tool.poe.tasks]
+fix-pygraphviz = "conda install --yes --freeze-installed conda-forge::pygraphviz=1.10.0"
+
+[tool.black]
+# https://github.com/psf/black
+target-version = ["py39"]
+line-length = 120
+color = true
+exclude = '''
+/(
+    \.git
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | buck-out
+    | build
+    | dist
+    | env
+    | venv
+)/
+'''
+
+[tool.isort]
+# https://github.com/timothycrosley/isort/
+py_version = 39
+line_length = 120
+known_typing = ["typing", "types", "typing_extensions"]
+sections = ["FUTURE", "TYPING", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+include_trailing_comma = true
+profile = "black"
+multi_line_output = 3
+indent = 4
+color_output = true
+
+[tool.pyright]
+include = ["graphtask", "typings"]
+reportPrivateImportUsage = true
+reportConstantRedefinition = true
+reportDuplicateImport = true
+reportFunctionMemberAccess = true
+reportImportCycles = true
+reportIncompatibleMethodOverride = true
+reportIncompatibleVariableOverride = true
+reportIncompleteStub = true
+reportInconsistentConstructor = true
+reportInvalidStubStatement = true
+reportMatchNotExhaustive = true
+reportMissingParameterType = true
+reportMissingTypeArgument = false
+reportOverlappingOverload = true
+reportPrivateUsage = true
+reportTypeCommentUsage = true
+reportUnknownArgumentType = true
+reportUnknownLambdaType = true
+reportUnknownMemberType = true
+reportUnknownParameterType = true
+reportUnknownVariableType = true
+reportUnnecessaryCast = true
+reportUnnecessaryComparison = true
+reportUnnecessaryContains = true
+reportUnnecessaryIsInstance = true
+reportUnnecessaryTypeIgnoreComment = true
+reportUnusedClass = true
+reportUnusedImport = true
+reportUnusedFunction = true
+reportUnusedVariable = true
+reportUnusedExpression = true
+reportUnusedCallResult = false
+reportUntypedBaseClass = true
+reportUntypedClassDecorator = true
+reportUntypedFunctionDecorator = true
+reportUntypedNamedTuple = true
+reportCallInDefaultInitializer = true
+reportImplicitStringConcatenation = true
+reportMissingSuperCall = true
+reportPropertyTypeMismatch = true
+reportUninitializedInstanceVariable = true
+
+[tool.pytest.ini_options]
+# https://docs.pytest.org/en/6.2.x/customize.html#pyproject-toml
+# Directories that are not visited by pytest collector:
+norecursedirs = ["hooks", "*.egg", ".eggs", "dist", "build", "docs", ".tox", ".git", "__pycache__"]
+addopts = ["--strict-markers", "--tb=short"]
+
+[tool.coverage.run]
+source = ["tests"]
+
+[coverage.paths]
+source = "graphtask"
+
+[coverage.run]
+branch = true
+
+[coverage.report]
+fail_under = 80
+show_missing = true
