@@ -1,3 +1,7 @@
+"""
+Test the functionality of a `Task`
+"""
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as s
@@ -114,9 +118,6 @@ def test_step_assertions():
 
     with pytest.raises(AssertionError, match="Cannot name node '<lambda>'"):
         task.step(fn=lambda: None)
-
-    with pytest.raises(AssertionError, match="Cannot find 'x' in the graph"):
-        task.step(fn=fn)
 
     with pytest.raises(AssertionError, match="Cannot verify that predicate 'is_dag' holds"):
         task.step(lambda: None, rename="cyclic")

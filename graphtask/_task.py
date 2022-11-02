@@ -9,14 +9,13 @@ from collections.abc import Callable, Hashable, Iterable, Mapping
 
 import networkx as nx
 from joblib import Parallel, delayed
-from networkx import DiGraph
 from stackeddag.core import edgesToText, mkEdges, mkLabels  # type: ignore[reportUnknownVariableType]
 
 from graphtask._check import is_dag, is_iterable, is_mapping, verify
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Task"]
+__all__ = ["Task", "step"]
 
 DecorableT = TypeVar("DecorableT", bound=Callable[..., Any])
 ArgsT = dict[str, Any]
@@ -24,7 +23,100 @@ SplitArgsT = list[ArgsT]
 MapArgsT = dict[Hashable, ArgsT]
 
 
-class Task:
+@overload
+def step(
+    fn: DecorableT,
+    *,
+    split: Optional[str] = None,
+    map: Optional[str] = None,
+    rename: Optional[str] = None,
+    args: Optional[Iterable[str]] = None,
+    kwargs: Optional[Iterable[str]] = None,
+    alias: Optional[Mapping[str, str]] = None,
+) -> DecorableT:
+    """Step invoked with a `fn`, returns the `fn`"""
+    ...
+
+
+@overload
+def step(
+    *,
+    split: Optional[str] = None,
+    map: Optional[str] = None,
+    rename: Optional[str] = None,
+    args: Optional[Iterable[str]] = None,
+    kwargs: Optional[Iterable[str]] = None,
+    alias: Optional[Mapping[str, str]] = None,
+) -> Callable[[DecorableT], DecorableT]:
+    """Step invoked without a `fn`, return a decorator"""
+    ...
+
+
+def step(
+    fn: Optional[DecorableT] = None,
+    *,
+    split: Optional[str] = None,
+    map: Optional[str] = None,
+    rename: Optional[str] = None,
+    args: Optional[Iterable[str]] = None,
+    kwargs: Optional[Iterable[str]] = None,
+    alias: Optional[Mapping[str, str]] = None,
+) -> Union[DecorableT, Callable[[DecorableT], DecorableT]]:
+    """A method decorator (or decorator factory) to add steps to the graph of a class inheriting from `Task`.
+
+    Args:
+        fn: The function to be decorated.
+        split: Iterable argument to invoke `fn` on each iterated value.
+        map: Mappable argument to invoke `fn` on each iterated value.
+        rename: Rename the node created with `fn`, default is `fn.__name__`.
+        args: Identifiers for variable positional arguments for `fn`.
+        kwargs: Identifiers for variable keyword arguments for `fn`.
+        alias: Rename arguments according to {"argument_name": "renamed_value"}.
+
+    Returns:
+        A decorator if no `fn` is given, otherwise `fn`."""
+
+    def decorator(fn: DecorableT) -> DecorableT:
+        setattr(fn, "__step__", dict(split=split, map=map, rename=rename, args=args, kwargs=kwargs, alias=alias))
+        return fn
+
+    if callable(fn):
+        # use `step` directly as a decorator (return the decorated fn)
+        return decorator(fn)
+    else:
+        # use `step` as a decorator factory (return a decorator)
+        return decorator
+
+
+class TaskMeta(type):
+    """A metaclass to enable classes inheriting from `Task` to use the `@step` decorator, which sets a `__step__`
+    attribute on each decorated method containing `kwargs` to `@step` for the decorated method.
+
+    On an `__init__` call of a class inheriting from `Task`, the metaclass iterates over all methods containing the
+    `__step__` attribute and adds them as 'real' steps of the `Task`. For an explanation of why this works, see:
+    https://stackoverflow.com/questions/16017397/injecting-function-call-after-init-with-decorator
+    """
+
+    def __call__(cls, *args: Any, **kwargs: Any):
+        """Called when you call MyNewClass()"""
+        obj = type.__call__(cls, *args, **kwargs)
+
+        # iterate over all the attribute names of the newly created object
+        for attr_name in dir(obj):
+            attr = getattr(obj, attr_name)
+
+            # short circuit all attributes that are not callable and don't contain the __step__ attributes
+            if not callable(attr) or not hasattr(attr, "__step__"):
+                continue
+
+            kwargs = getattr(attr, "__step__")
+            obj.step(attr, **kwargs)
+        return obj
+
+
+class Task(metaclass=TaskMeta):
+    """A Task consists of `step`s that are implicitly modeled as a directed, acyclic graph (DAG)."""
+
     def __init__(self, n_jobs: int = 1) -> None:
         super().__init__()
         # public attributes
@@ -90,7 +182,6 @@ class Task:
         """
 
         def decorator(fn: DecorableT) -> DecorableT:
-            """The decorator function is returned if no `fn` is given."""
             params = get_function_params(fn)
             original_kwargs, original_posargs, _, _ = extract_step_parameters(params, args, kwargs)
             # we only care about the parameter names from now on (as a set of string)
@@ -123,7 +214,6 @@ class Task:
             # make sure the fn's parameters are nodes in the graph
             for param in params:
                 logger.debug(f"Adding dependency '{param}' to graph")
-                assert param in self._graph.nodes, f"Cannot find '{param}' in the graph, but set as a dependency."
                 self._graph.add_edge(param, fn_name, split=split == param, map=map == param)
 
             # make sure that the resulting graph is a DAG
@@ -192,6 +282,7 @@ class Task:
         logger.debug(f"Determined split kwarg: {kwarg_split}")
         logger.debug(f"Determined map kwarg: {kwarg_map}\n")
 
+        assert "__function__" in current_node, f"Node '{node}' not defined, but set as a dependency."
         fn = current_node["__function__"]
         if kwarg_split is not None:
             result = self._parallel()(delayed(fn)(**kwargs, **arg) for arg in kwarg_split)
@@ -231,7 +322,7 @@ class Task:
         return header + text
 
 
-def predecessor_edges(graph: DiGraph, node: Hashable) -> tuple[ArgsT, Optional[SplitArgsT], Optional[MapArgsT]]:
+def predecessor_edges(graph: nx.DiGraph, node: Hashable) -> tuple[ArgsT, Optional[SplitArgsT], Optional[MapArgsT]]:
     """Prepare the input data for `node` based on normal, `split` and `map` edges.
     The split edge (there can only be one) is transformed from {"key": [1, 2, ...]} to [{"key": 1}, {"key": 2}, ...].
     The map edge: {"key": {"map_key_1": 1, "map_key_2": 2}} -> {"map_key_1": {"key": 1}, "map_key_2": {"key": 2}, ...}.
@@ -388,19 +479,19 @@ def get_function_params(fn: Callable[..., Any]) -> list[inspect.Parameter]:
     return list(inspect.signature(fn).parameters.values())
 
 
-def bfs_successors(graph: DiGraph, node: Hashable) -> list[Hashable]:
+def bfs_successors(graph: nx.DiGraph, node: Hashable) -> list[Hashable]:
     """The names of all successors to `node`"""
     result: list[Hashable] = list(nx.bfs_tree(graph, node))[1:]
     return result
 
 
-def bfs_predecessors(graph: DiGraph, node: Hashable) -> list[Hashable]:
+def bfs_predecessors(graph: nx.DiGraph, node: Hashable) -> list[Hashable]:
     """The names of all predecessors to `node`"""
     result: list[Hashable] = list(nx.bfs_tree(graph.reverse(copy=False), node))[1:]
     return result
 
 
-def topological_successors(graph: DiGraph, node: Hashable) -> list[list[Hashable]]:
+def topological_successors(graph: nx.DiGraph, node: Hashable) -> list[list[Hashable]]:
     """The names of all invalidated nodes (grouped in generations) if `node` changed"""
     bfs_tree = nx.bfs_tree(graph, node)
     subgraph = nx.induced_subgraph(graph, bfs_tree.nodes)
@@ -408,12 +499,12 @@ def topological_successors(graph: DiGraph, node: Hashable) -> list[list[Hashable
     return list(generations)
 
 
-def topological_predecessors(graph: DiGraph, node: Hashable) -> list[list[Hashable]]:
+def topological_predecessors(graph: nx.DiGraph, node: Hashable) -> list[list[Hashable]]:
     """The names of all dependency nodes (grouped in generations) for `node`"""
     generations = topological_successors(graph.reverse(copy=False), node)
     return list(reversed(generations))
 
 
-def topological_generations(graph: DiGraph) -> list[list[Hashable]]:
+def topological_generations(graph: nx.DiGraph) -> list[list[Hashable]]:
     """The names of all nodes in the graph grouped into generations"""
     return list(nx.topological_generations(graph))
