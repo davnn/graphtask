@@ -158,13 +158,12 @@ addopts = ["--strict-markers", "--tb=short"]
 
 [tool.coverage.run]
 source = ["tests"]
-
-[coverage.paths]
-source = "graphtask"
-
-[coverage.run]
 branch = true
 
-[coverage.report]
-fail_under = 80
+[tool.coverage.paths]
+source = ["graphtask"]
+
+[tool.coverage.report]
+fail_under = 90
 show_missing = true
+exclude_lines = ["pragma: no cover", "@overload"]
