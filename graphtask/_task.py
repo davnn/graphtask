@@ -5,7 +5,9 @@ from typing import Any, Optional, TypeVar, Union, cast, overload
 
 import inspect
 import logging
+import warnings
 from collections.abc import Callable, Hashable, Iterable, Mapping
+from sys import maxsize
 
 import networkx as nx
 from joblib import Parallel, delayed
@@ -183,9 +185,10 @@ class Task(metaclass=TaskMeta):
 
         def decorator(fn: DecorableT) -> DecorableT:
             params = get_function_params(fn)
-            original_kwargs, original_posargs, _, _ = extract_step_parameters(params, args, kwargs)
+            original_posargs, original_kwargs = split_step_params(params, args, kwargs)
+            # combine all parameters to a single `set` of parameters (the dependencies in the graph)
             # we only care about the parameter names from now on (as a set of string)
-            params = combine_step_parameters(original_kwargs, original_posargs, args, kwargs)
+            params = set(original_posargs).union(set(original_kwargs))
             alias_step_parameters(params, alias)
             verify_step_parameters(params, split=split, map=map)
             logger.debug(f"Extracted function parameters: '{params}'.")
@@ -204,8 +207,8 @@ class Task(metaclass=TaskMeta):
                 Returns:
                     Return value of the original (unprocessed) function.
                 """
-                pos, var = process_passed_args(passed, original_posargs, args)
-                return fn(*pos, *var, **passed)
+                positional = process_positional_args(passed, original_posargs)
+                return fn(*positional, **passed)
 
             # add the processed function to the graph
             logger.debug(f"Adding node '{fn_name}' to graph")
@@ -303,7 +306,7 @@ class Task(metaclass=TaskMeta):
 
     def __repr__(self) -> str:
         graph = self._graph
-        header = f"{self.__str__()}\n"
+        header = f"{self.__str__()}"
 
         nodes: list[str] = list(graph.nodes)
         edges: list[tuple[str, str]] = list(graph.edges)
@@ -314,12 +317,12 @@ class Task(metaclass=TaskMeta):
 
         # graph with no edges
         if len(edges) == 0:
-            return header + f"o    {','.join(nodes)}"
+            return header + f"\no    {','.join(nodes)}"
 
         nodes_reshaped = [(node, node) for node in nodes]
         edges_reshaped = [(src, [dst]) for src, dst in edges]
         text: str = edgesToText(mkLabels(nodes_reshaped), mkEdges(edges_reshaped))
-        return header + text
+        return header + f"\n{text.strip()}"
 
 
 def predecessor_edges(graph: nx.DiGraph, node: Hashable) -> tuple[ArgsT, Optional[SplitArgsT], Optional[MapArgsT]]:
@@ -373,38 +376,31 @@ def split_arg(key: str, data: Iterable[Any]) -> SplitArgsT:
     return result
 
 
-def process_passed_args(
-    passed: dict[str, Any], pos_args: list[str], var_args: Optional[Iterable[str]]
-) -> tuple[list[str], list[str]]:
-    """Process `passed` args to extract positional only and variable positional arguments and remove them from `passed`.
+def process_positional_args(passed: dict[str, Any], pos_args: list[str]) -> list[str]:
+    """Process `passed` args to extract positional arguments and remove them from `passed` (the remaining kw-args).
 
     Args:
         passed: Original arguments passed as keyword arguments.
         pos_args: Ordered identifiers of the positional only arguments.
-        var_args: Ordered identifiers of the variable positional arguments.
 
     Returns:
         pos_values: Ordered values of positional-only arguments.
-        var_values: Ordered values of variable positional arguments.
     """
     pos_values: list[str] = []
-    var_values: list[str] = []
     for arg in pos_args:
         pos_values.append(passed[arg])
         del passed[arg]
 
-    if var_args is not None:
-        for arg in var_args:
-            var_values.append(passed[arg])
-            del passed[arg]
-
-    return pos_values, var_values
+    return pos_values
 
 
-def extract_step_parameters(
+def split_step_params(
     params: list[inspect.Parameter], args: Optional[Iterable[str]], kwargs: Optional[Iterable[str]]
-) -> tuple[set[str], list[str], Optional[str], Optional[str]]:
-    """Extract parameters by kind (kw, pos-only, var-pos, var-kw) from initially inspected `params`.
+) -> tuple[list[str], list[str]]:
+    """Split positional and keyword arguments from `params`.
+
+    Note that an argument has to be supplied using a keyword if it follows a var-positional argument (following *args),
+    if it is declared as a keyword only argument (following *) or if it declared as a variable keyword argument.
 
     Args:
         params: Initial inspected parameters.
@@ -412,45 +408,90 @@ def extract_step_parameters(
         kwargs: Given `kwargs` from `step`.
 
     Returns:
-        kw: Keyword arguments (includes positional or keyword arguments and keyword only)
-        pos: Positional-only arguments.
-        var_pos: Optional variable positional argument.
-        var_kw: Optional variable position argument.
+        positional: Positional arguments (can be `POSITIONAL_ONLY`, `POSITIONAL_OR_KEYWORD`, or `VAR_POSITIONAL`).
+        keyword: Keyword arguments
     """
-    kwargs_names: set[str] = set()
-    pos_only_names: list[str] = []
-    var_arg_name: Optional[str] = None  # there can only be one
-    var_kwarg_name: Optional[str] = None  # there can only be one
-    for p in params:
-        if p.kind == inspect.Parameter.POSITIONAL_ONLY:
-            pos_only_names.append(p.name)
-        elif p.kind == inspect.Parameter.VAR_POSITIONAL:
-            var_arg_name = p.name
-        elif p.kind == inspect.Parameter.VAR_KEYWORD:
-            var_kwarg_name = p.name
-        else:  # POSITIONAL_OR_KEYWORD or KEYWORD_ONLY
-            kwargs_names.add(p.name)
+    param_names: list[Union[str, list[str]]] = []
+    param_kinds: list[inspect._ParameterKind] = []  # type:ignore[reportPrivateUsage]
+    has_var_arg = False
+    has_var_kwarg = False
+    for param in params:
+        name = param.name
+        kind = param.kind
+        param_kinds.append(kind)
 
-    assert_var_arg = f"Variable arguments `*args` require step `args` parameter and vice versa."
-    assert_var_kwarg = f"Variable keyword arguments `**kwargs` require step `kwargs` parameter and vice versa."
-    assert not (args is not None) ^ (var_arg_name is not None), assert_var_arg
-    assert not (kwargs is not None) ^ (var_kwarg_name is not None), assert_var_kwarg
+        # replace the *args and **kwargs param with a list of replacements
+        if kind == inspect.Parameter.VAR_POSITIONAL:
+            assert args is not None, f"Variable argument '*{name}' requires 'args' parameter to be set in 'step'."
+            param_names.append(list(args))
+            has_var_arg = True
+        elif kind == inspect.Parameter.VAR_KEYWORD:
+            assert kwargs is not None, f"Variable argument '**{name}' requires 'kwargs' parameter to be set in 'step'."
+            param_names.append(list(kwargs))
+            has_var_kwarg = True
+        else:
+            param_names.append(name)
 
-    return kwargs_names, pos_only_names, var_arg_name, var_kwarg_name
+    if has_var_arg and args is not None:
+        duplicates = [arg for arg in args if arg in param_names]
+        assert not any(duplicates), (
+            f"The names provided to 'args' cannot be duplicates of the "
+            f"function parameters, but found duplicates: '{duplicates}'"
+        )
+
+    if has_var_kwarg and kwargs is not None:
+        duplicates = [arg for arg in kwargs if arg in param_names]
+        assert not any(duplicates), (
+            f"The names provided to 'kwargs' cannot be duplicates of the "
+            f"function parameters, but found duplicates: '{duplicates}'"
+        )
+
+    if args is not None and not has_var_arg:
+        warnings.warn("Provided 'args' argument for 'step', but no '*args' parameter found.")
+
+    if kwargs is not None and not has_var_kwarg:
+        warnings.warn("Provided 'kwargs' argument for 'step', but no '**kwargs' parameter found.")
+
+    # split into positional and keyword arguments according to idx and flatten the nested `args` and `kwargs`
+    kw_idx = first_keyword_idx(param_kinds)
+    pos_names = flatten_names(param_names[:kw_idx])
+    kw_names = flatten_names(param_names[kw_idx:])
+    return pos_names, kw_names
 
 
-def combine_step_parameters(
-    original_kwargs: set[str],
-    original_posargs: list[str],
-    step_args: Optional[Iterable[str]],
-    step_kwargs: Optional[Iterable[str]],
-):
-    """Combine all possible parameters to a single `set` of parameters (the dependencies in the graph)"""
-    return (
-        original_kwargs.union(set(original_posargs))
-        .union(set(step_args) if step_args is not None else set())
-        .union(set(step_kwargs) if step_kwargs is not None else set())
-    )
+def flatten_names(ls: list[Union[str, list[str]]]) -> list[str]:
+    """Flatten a list of possible nested strings, such that ['ab', ['c', 'd']] becomes ['ab', 'c', 'd']"""
+    result: list[str] = []
+    for item in ls:
+        if isinstance(item, list):
+            for sub in item:
+                result.append(sub)
+        else:
+            result.append(item)
+    return result
+
+
+def first_keyword_idx(param_kinds: list[inspect._ParameterKind]) -> int:  # type: ignore[reportPrivateUsage]
+    """Return the first idx of an argument that can only be specified as a keyword or otherwise a very large integer"""
+    var_pos = inspect.Parameter.VAR_POSITIONAL
+    kw_only = inspect.Parameter.KEYWORD_ONLY
+    var_kw = inspect.Parameter.VAR_KEYWORD
+
+    # if we do not find a var-pos or kw-only argument, we return a very large int (sys.maxsize)
+    # treating every argument as positional
+    var_pos_idx = kw_only_idx = var_kw_idx = maxsize
+
+    if var_pos in param_kinds:
+        # + 1 because we have to include the var pos argument in the positional arguments
+        var_pos_idx = param_kinds.index(var_pos) + 1
+
+    if kw_only in param_kinds:
+        kw_only_idx = param_kinds.index(kw_only)
+
+    if var_kw in param_kinds:
+        var_kw_idx = param_kinds.index(var_kw)
+
+    return min(var_pos_idx, kw_only_idx, var_kw_idx)
 
 
 def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) -> None:
@@ -465,13 +506,13 @@ def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) 
 def verify_step_parameters(params: set[str], split: Optional[str], map: Optional[str]) -> None:
     """Ensure that given `split` and `map` are in the (final) parameter set."""
     if split is not None and map is not None:
-        raise AssertionError("Cannot combine `split` and `map` in a single step.")
+        raise AssertionError("Cannot combine 'split' and 'map' in a single step.")
 
     if split is not None:
-        assert split in params, f"Argument `split` must refer to one of the parameters, but found {split}."
+        assert split in params, f"Step argument 'split' must refer to one of the parameters, but found '{split}'."
 
     if map is not None:
-        assert map in params, f"Argument `map` must refer to one of the parameters, but found {map}."
+        assert map in params, f"Step argument 'map' must refer to one of the parameters, but found '{map}'."
 
 
 def get_function_params(fn: Callable[..., Any]) -> list[inspect.Parameter]:
@@ -479,13 +520,13 @@ def get_function_params(fn: Callable[..., Any]) -> list[inspect.Parameter]:
     return list(inspect.signature(fn).parameters.values())
 
 
-def bfs_successors(graph: nx.DiGraph, node: Hashable) -> list[Hashable]:
+def bfs_successors(graph: nx.DiGraph, node: Hashable) -> list[Hashable]:  # pragma: no cover (currently not used)
     """The names of all successors to `node`"""
     result: list[Hashable] = list(nx.bfs_tree(graph, node))[1:]
     return result
 
 
-def bfs_predecessors(graph: nx.DiGraph, node: Hashable) -> list[Hashable]:
+def bfs_predecessors(graph: nx.DiGraph, node: Hashable) -> list[Hashable]:  # pragma: no cover (currently not used)
     """The names of all predecessors to `node`"""
     result: list[Hashable] = list(nx.bfs_tree(graph.reverse(copy=False), node))[1:]
     return result
