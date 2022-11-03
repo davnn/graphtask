@@ -19,7 +19,6 @@
 
 <!-- Mark with an `x` all the checkboxes that apply (like `[x]`) -->
 
-- [ ] I've read the [`CODE_OF_CONDUCT.md`](https://github.com/davnn/graphtask/blob/main/.github/CODE_OF_CONDUCT.md).
 - [ ] I've read the [`CONTRIBUTING.md`](https://github.com/davnn/graphtask/blob/main/.github/CONTRIBUTING.md) guide.
 - [ ] I've checked the code style using `make submit`.
 - [ ] I've written tests for all new methods and classes that I created.
