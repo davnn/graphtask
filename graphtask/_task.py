@@ -5,18 +5,19 @@ from typing import Any, Optional, TypeVar, Union, cast, overload
 
 import inspect
 import logging
+import warnings
 from collections.abc import Callable, Hashable, Iterable, Mapping
+from sys import maxsize
 
 import networkx as nx
 from joblib import Parallel, delayed
-from networkx import DiGraph
 from stackeddag.core import edgesToText, mkEdges, mkLabels  # type: ignore[reportUnknownVariableType]
 
 from graphtask._check import is_dag, is_iterable, is_mapping, verify
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Task"]
+__all__ = ["Task", "step"]
 
 DecorableT = TypeVar("DecorableT", bound=Callable[..., Any])
 ArgsT = dict[str, Any]
@@ -24,7 +25,100 @@ SplitArgsT = list[ArgsT]
 MapArgsT = dict[Hashable, ArgsT]
 
 
-class Task:
+@overload
+def step(
+    fn: DecorableT,
+    *,
+    split: Optional[str] = None,
+    map: Optional[str] = None,
+    rename: Optional[str] = None,
+    args: Optional[Iterable[str]] = None,
+    kwargs: Optional[Iterable[str]] = None,
+    alias: Optional[Mapping[str, str]] = None,
+) -> DecorableT:
+    """Step invoked with a `fn`, returns the `fn`"""
+    ...
+
+
+@overload
+def step(
+    *,
+    split: Optional[str] = None,
+    map: Optional[str] = None,
+    rename: Optional[str] = None,
+    args: Optional[Iterable[str]] = None,
+    kwargs: Optional[Iterable[str]] = None,
+    alias: Optional[Mapping[str, str]] = None,
+) -> Callable[[DecorableT], DecorableT]:
+    """Step invoked without a `fn`, return a decorator"""
+    ...
+
+
+def step(
+    fn: Optional[DecorableT] = None,
+    *,
+    split: Optional[str] = None,
+    map: Optional[str] = None,
+    rename: Optional[str] = None,
+    args: Optional[Iterable[str]] = None,
+    kwargs: Optional[Iterable[str]] = None,
+    alias: Optional[Mapping[str, str]] = None,
+) -> Union[DecorableT, Callable[[DecorableT], DecorableT]]:
+    """A method decorator (or decorator factory) to add steps to the graph of a class inheriting from `Task`.
+
+    Args:
+        fn: The function to be decorated.
+        split: Iterable argument to invoke `fn` on each iterated value.
+        map: Mappable argument to invoke `fn` on each iterated value.
+        rename: Rename the node created with `fn`, default is `fn.__name__`.
+        args: Identifiers for variable positional arguments for `fn`.
+        kwargs: Identifiers for variable keyword arguments for `fn`.
+        alias: Rename arguments according to {"argument_name": "renamed_value"}.
+
+    Returns:
+        A decorator if no `fn` is given, otherwise `fn`."""
+
+    def decorator(fn: DecorableT) -> DecorableT:
+        setattr(fn, "__step__", dict(split=split, map=map, rename=rename, args=args, kwargs=kwargs, alias=alias))
+        return fn
+
+    if callable(fn):
+        # use `step` directly as a decorator (return the decorated fn)
+        return decorator(fn)
+    else:
+        # use `step` as a decorator factory (return a decorator)
+        return decorator
+
+
+class TaskMeta(type):
+    """A metaclass to enable classes inheriting from `Task` to use the `@step` decorator, which sets a `__step__`
+    attribute on each decorated method containing `kwargs` to `@step` for the decorated method.
+
+    On an `__init__` call of a class inheriting from `Task`, the metaclass iterates over all methods containing the
+    `__step__` attribute and adds them as 'real' steps of the `Task`. For an explanation of why this works, see:
+    https://stackoverflow.com/questions/16017397/injecting-function-call-after-init-with-decorator
+    """
+
+    def __call__(cls, *args: Any, **kwargs: Any):
+        """Called when you call MyNewClass()"""
+        obj = type.__call__(cls, *args, **kwargs)
+
+        # iterate over all the attribute names of the newly created object
+        for attr_name in dir(obj):
+            attr = getattr(obj, attr_name)
+
+            # short circuit all attributes that are not callable and don't contain the __step__ attributes
+            if not callable(attr) or not hasattr(attr, "__step__"):
+                continue
+
+            kwargs = getattr(attr, "__step__")
+            obj.step(attr, **kwargs)
+        return obj
+
+
+class Task(metaclass=TaskMeta):
+    """A Task consists of `step`s that are implicitly modeled as a directed, acyclic graph (DAG)."""
+
     def __init__(self, n_jobs: int = 1) -> None:
         super().__init__()
         # public attributes
@@ -90,11 +184,11 @@ class Task:
         """
 
         def decorator(fn: DecorableT) -> DecorableT:
-            """The decorator function is returned if no `fn` is given."""
             params = get_function_params(fn)
-            original_kwargs, original_posargs, _, _ = extract_step_parameters(params, args, kwargs)
+            original_posargs, original_kwargs = split_step_params(params, args, kwargs)
+            # combine all parameters to a single `set` of parameters (the dependencies in the graph)
             # we only care about the parameter names from now on (as a set of string)
-            params = combine_step_parameters(original_kwargs, original_posargs, args, kwargs)
+            params = set(original_posargs).union(set(original_kwargs))
             alias_step_parameters(params, alias)
             verify_step_parameters(params, split=split, map=map)
             logger.debug(f"Extracted function parameters: '{params}'.")
@@ -113,8 +207,8 @@ class Task:
                 Returns:
                     Return value of the original (unprocessed) function.
                 """
-                pos, var = process_passed_args(passed, original_posargs, args)
-                return fn(*pos, *var, **passed)
+                positional = process_positional_args(passed, original_posargs)
+                return fn(*positional, **passed)
 
             # add the processed function to the graph
             logger.debug(f"Adding node '{fn_name}' to graph")
@@ -123,7 +217,6 @@ class Task:
             # make sure the fn's parameters are nodes in the graph
             for param in params:
                 logger.debug(f"Adding dependency '{param}' to graph")
-                assert param in self._graph.nodes, f"Cannot find '{param}' in the graph, but set as a dependency."
                 self._graph.add_edge(param, fn_name, split=split == param, map=map == param)
 
             # make sure that the resulting graph is a DAG
@@ -192,6 +285,7 @@ class Task:
         logger.debug(f"Determined split kwarg: {kwarg_split}")
         logger.debug(f"Determined map kwarg: {kwarg_map}\n")
 
+        assert "__function__" in current_node, f"Node '{node}' not defined, but set as a dependency."
         fn = current_node["__function__"]
         if kwarg_split is not None:
             result = self._parallel()(delayed(fn)(**kwargs, **arg) for arg in kwarg_split)
@@ -212,7 +306,7 @@ class Task:
 
     def __repr__(self) -> str:
         graph = self._graph
-        header = f"{self.__str__()}\n"
+        header = f"{self.__str__()}"
 
         nodes: list[str] = list(graph.nodes)
         edges: list[tuple[str, str]] = list(graph.edges)
@@ -223,15 +317,15 @@ class Task:
 
         # graph with no edges
         if len(edges) == 0:
-            return header + f"o    {','.join(nodes)}"
+            return header + f"\no    {','.join(nodes)}"
 
         nodes_reshaped = [(node, node) for node in nodes]
         edges_reshaped = [(src, [dst]) for src, dst in edges]
         text: str = edgesToText(mkLabels(nodes_reshaped), mkEdges(edges_reshaped))
-        return header + text
+        return header + f"\n{text.strip()}"
 
 
-def predecessor_edges(graph: DiGraph, node: Hashable) -> tuple[ArgsT, Optional[SplitArgsT], Optional[MapArgsT]]:
+def predecessor_edges(graph: nx.DiGraph, node: Hashable) -> tuple[ArgsT, Optional[SplitArgsT], Optional[MapArgsT]]:
     """Prepare the input data for `node` based on normal, `split` and `map` edges.
     The split edge (there can only be one) is transformed from {"key": [1, 2, ...]} to [{"key": 1}, {"key": 2}, ...].
     The map edge: {"key": {"map_key_1": 1, "map_key_2": 2}} -> {"map_key_1": {"key": 1}, "map_key_2": {"key": 2}, ...}.
@@ -282,38 +376,31 @@ def split_arg(key: str, data: Iterable[Any]) -> SplitArgsT:
     return result
 
 
-def process_passed_args(
-    passed: dict[str, Any], pos_args: list[str], var_args: Optional[Iterable[str]]
-) -> tuple[list[str], list[str]]:
-    """Process `passed` args to extract positional only and variable positional arguments and remove them from `passed`.
+def process_positional_args(passed: dict[str, Any], pos_args: list[str]) -> list[str]:
+    """Process `passed` args to extract positional arguments and remove them from `passed` (the remaining kw-args).
 
     Args:
         passed: Original arguments passed as keyword arguments.
         pos_args: Ordered identifiers of the positional only arguments.
-        var_args: Ordered identifiers of the variable positional arguments.
 
     Returns:
         pos_values: Ordered values of positional-only arguments.
-        var_values: Ordered values of variable positional arguments.
     """
     pos_values: list[str] = []
-    var_values: list[str] = []
     for arg in pos_args:
         pos_values.append(passed[arg])
         del passed[arg]
 
-    if var_args is not None:
-        for arg in var_args:
-            var_values.append(passed[arg])
-            del passed[arg]
-
-    return pos_values, var_values
+    return pos_values
 
 
-def extract_step_parameters(
+def split_step_params(
     params: list[inspect.Parameter], args: Optional[Iterable[str]], kwargs: Optional[Iterable[str]]
-) -> tuple[set[str], list[str], Optional[str], Optional[str]]:
-    """Extract parameters by kind (kw, pos-only, var-pos, var-kw) from initially inspected `params`.
+) -> tuple[list[str], list[str]]:
+    """Split positional and keyword arguments from `params`.
+
+    Note that an argument has to be supplied using a keyword if it follows a var-positional argument (following *args),
+    if it is declared as a keyword only argument (following *) or if it declared as a variable keyword argument.
 
     Args:
         params: Initial inspected parameters.
@@ -321,45 +408,90 @@ def extract_step_parameters(
         kwargs: Given `kwargs` from `step`.
 
     Returns:
-        kw: Keyword arguments (includes positional or keyword arguments and keyword only)
-        pos: Positional-only arguments.
-        var_pos: Optional variable positional argument.
-        var_kw: Optional variable position argument.
+        positional: Positional arguments (can be `POSITIONAL_ONLY`, `POSITIONAL_OR_KEYWORD`, or `VAR_POSITIONAL`).
+        keyword: Keyword arguments
     """
-    kwargs_names: set[str] = set()
-    pos_only_names: list[str] = []
-    var_arg_name: Optional[str] = None  # there can only be one
-    var_kwarg_name: Optional[str] = None  # there can only be one
-    for p in params:
-        if p.kind == inspect.Parameter.POSITIONAL_ONLY:
-            pos_only_names.append(p.name)
-        elif p.kind == inspect.Parameter.VAR_POSITIONAL:
-            var_arg_name = p.name
-        elif p.kind == inspect.Parameter.VAR_KEYWORD:
-            var_kwarg_name = p.name
-        else:  # POSITIONAL_OR_KEYWORD or KEYWORD_ONLY
-            kwargs_names.add(p.name)
+    param_names: list[Union[str, list[str]]] = []
+    param_kinds: list[inspect._ParameterKind] = []  # type:ignore[reportPrivateUsage]
+    has_var_arg = False
+    has_var_kwarg = False
+    for param in params:
+        name = param.name
+        kind = param.kind
+        param_kinds.append(kind)
 
-    assert_var_arg = f"Variable arguments `*args` require step `args` parameter and vice versa."
-    assert_var_kwarg = f"Variable keyword arguments `**kwargs` require step `kwargs` parameter and vice versa."
-    assert not (args is not None) ^ (var_arg_name is not None), assert_var_arg
-    assert not (kwargs is not None) ^ (var_kwarg_name is not None), assert_var_kwarg
+        # replace the *args and **kwargs param with a list of replacements
+        if kind == inspect.Parameter.VAR_POSITIONAL:
+            assert args is not None, f"Variable argument '*{name}' requires 'args' parameter to be set in 'step'."
+            param_names.append(list(args))
+            has_var_arg = True
+        elif kind == inspect.Parameter.VAR_KEYWORD:
+            assert kwargs is not None, f"Variable argument '**{name}' requires 'kwargs' parameter to be set in 'step'."
+            param_names.append(list(kwargs))
+            has_var_kwarg = True
+        else:
+            param_names.append(name)
 
-    return kwargs_names, pos_only_names, var_arg_name, var_kwarg_name
+    if has_var_arg and args is not None:
+        duplicates = [arg for arg in args if arg in param_names]
+        assert not any(duplicates), (
+            f"The names provided to 'args' cannot be duplicates of the "
+            f"function parameters, but found duplicates: '{duplicates}'"
+        )
+
+    if has_var_kwarg and kwargs is not None:
+        duplicates = [arg for arg in kwargs if arg in param_names]
+        assert not any(duplicates), (
+            f"The names provided to 'kwargs' cannot be duplicates of the "
+            f"function parameters, but found duplicates: '{duplicates}'"
+        )
+
+    if args is not None and not has_var_arg:
+        warnings.warn("Provided 'args' argument for 'step', but no '*args' parameter found.")
+
+    if kwargs is not None and not has_var_kwarg:
+        warnings.warn("Provided 'kwargs' argument for 'step', but no '**kwargs' parameter found.")
+
+    # split into positional and keyword arguments according to idx and flatten the nested `args` and `kwargs`
+    kw_idx = first_keyword_idx(param_kinds)
+    pos_names = flatten_names(param_names[:kw_idx])
+    kw_names = flatten_names(param_names[kw_idx:])
+    return pos_names, kw_names
 
 
-def combine_step_parameters(
-    original_kwargs: set[str],
-    original_posargs: list[str],
-    step_args: Optional[Iterable[str]],
-    step_kwargs: Optional[Iterable[str]],
-):
-    """Combine all possible parameters to a single `set` of parameters (the dependencies in the graph)"""
-    return (
-        original_kwargs.union(set(original_posargs))
-        .union(set(step_args) if step_args is not None else set())
-        .union(set(step_kwargs) if step_kwargs is not None else set())
-    )
+def flatten_names(ls: list[Union[str, list[str]]]) -> list[str]:
+    """Flatten a list of possible nested strings, such that ['ab', ['c', 'd']] becomes ['ab', 'c', 'd']"""
+    result: list[str] = []
+    for item in ls:
+        if isinstance(item, list):
+            for sub in item:
+                result.append(sub)
+        else:
+            result.append(item)
+    return result
+
+
+def first_keyword_idx(param_kinds: list[inspect._ParameterKind]) -> int:  # type: ignore[reportPrivateUsage]
+    """Return the first idx of an argument that can only be specified as a keyword or otherwise a very large integer"""
+    var_pos = inspect.Parameter.VAR_POSITIONAL
+    kw_only = inspect.Parameter.KEYWORD_ONLY
+    var_kw = inspect.Parameter.VAR_KEYWORD
+
+    # if we do not find a var-pos or kw-only argument, we return a very large int (sys.maxsize)
+    # treating every argument as positional
+    var_pos_idx = kw_only_idx = var_kw_idx = maxsize
+
+    if var_pos in param_kinds:
+        # + 1 because we have to include the var pos argument in the positional arguments
+        var_pos_idx = param_kinds.index(var_pos) + 1
+
+    if kw_only in param_kinds:
+        kw_only_idx = param_kinds.index(kw_only)
+
+    if var_kw in param_kinds:
+        var_kw_idx = param_kinds.index(var_kw)
+
+    return min(var_pos_idx, kw_only_idx, var_kw_idx)
 
 
 def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) -> None:
@@ -374,13 +506,13 @@ def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) 
 def verify_step_parameters(params: set[str], split: Optional[str], map: Optional[str]) -> None:
     """Ensure that given `split` and `map` are in the (final) parameter set."""
     if split is not None and map is not None:
-        raise AssertionError("Cannot combine `split` and `map` in a single step.")
+        raise AssertionError("Cannot combine 'split' and 'map' in a single step.")
 
     if split is not None:
-        assert split in params, f"Argument `split` must refer to one of the parameters, but found {split}."
+        assert split in params, f"Step argument 'split' must refer to one of the parameters, but found '{split}'."
 
     if map is not None:
-        assert map in params, f"Argument `map` must refer to one of the parameters, but found {map}."
+        assert map in params, f"Step argument 'map' must refer to one of the parameters, but found '{map}'."
 
 
 def get_function_params(fn: Callable[..., Any]) -> list[inspect.Parameter]:
@@ -388,19 +520,19 @@ def get_function_params(fn: Callable[..., Any]) -> list[inspect.Parameter]:
     return list(inspect.signature(fn).parameters.values())
 
 
-def bfs_successors(graph: DiGraph, node: Hashable) -> list[Hashable]:
+def bfs_successors(graph: nx.DiGraph, node: Hashable) -> list[Hashable]:  # pragma: no cover (currently not used)
     """The names of all successors to `node`"""
     result: list[Hashable] = list(nx.bfs_tree(graph, node))[1:]
     return result
 
 
-def bfs_predecessors(graph: DiGraph, node: Hashable) -> list[Hashable]:
+def bfs_predecessors(graph: nx.DiGraph, node: Hashable) -> list[Hashable]:  # pragma: no cover (currently not used)
     """The names of all predecessors to `node`"""
     result: list[Hashable] = list(nx.bfs_tree(graph.reverse(copy=False), node))[1:]
     return result
 
 
-def topological_successors(graph: DiGraph, node: Hashable) -> list[list[Hashable]]:
+def topological_successors(graph: nx.DiGraph, node: Hashable) -> list[list[Hashable]]:
     """The names of all invalidated nodes (grouped in generations) if `node` changed"""
     bfs_tree = nx.bfs_tree(graph, node)
     subgraph = nx.induced_subgraph(graph, bfs_tree.nodes)
@@ -408,12 +540,12 @@ def topological_successors(graph: DiGraph, node: Hashable) -> list[list[Hashable
     return list(generations)
 
 
-def topological_predecessors(graph: DiGraph, node: Hashable) -> list[list[Hashable]]:
+def topological_predecessors(graph: nx.DiGraph, node: Hashable) -> list[list[Hashable]]:
     """The names of all dependency nodes (grouped in generations) for `node`"""
     generations = topological_successors(graph.reverse(copy=False), node)
     return list(reversed(generations))
 
 
-def topological_generations(graph: DiGraph) -> list[list[Hashable]]:
+def topological_generations(graph: nx.DiGraph) -> list[list[Hashable]]:
     """The names of all nodes in the graph grouped into generations"""
     return list(nx.topological_generations(graph))
