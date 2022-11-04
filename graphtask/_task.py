@@ -7,6 +7,7 @@ import inspect
 import logging
 import warnings
 from collections.abc import Callable, Hashable, Iterable, Mapping
+from enum import Enum
 from sys import maxsize
 
 import networkx as nx
@@ -24,9 +25,17 @@ ArgsT = dict[str, Any]
 SplitArgsT = list[ArgsT]
 MapArgsT = dict[Hashable, ArgsT]
 
-FN_ATTRIBUTE = "__function__"
+FUNC_ATTRIBUTE = "__func__"
 DATA_ATTRIBUTE = "__data__"
 STEP_ATTRIBUTE = "__step__"
+TYPE_ATTRIBUTE = "__type__"
+
+
+class NodeType(Enum):
+    """The kind of node stored in `TYPE_ATTRIBUTE` of a node."""
+
+    ATTRIBUTE = 1
+    FUNCTION = 2
 
 
 @overload
@@ -202,9 +211,9 @@ class Task(metaclass=TaskMeta):
             # 1. A node can be `defined`, meaning that the name of the node is already in the graph, but there is
             # no corresponding function available for the node. This is the case if a node is referred to before
             # the function is declared.
-            # 2. A node can be `initialized`, meaning that the node in the graph has an existing `FN_ATTRIBUTE`.
+            # 2. A node can be `initialized`, meaning that the node in the graph has an existing `FUNC_ATTRIBUTE`.
             if fn_name in self._graph.nodes:
-                assert FN_ATTRIBUTE not in self._graph.nodes[fn_name], (
+                assert FUNC_ATTRIBUTE not in self._graph.nodes[fn_name], (
                     f"Cannot add already existing node '{fn_name}' to graph, use 'rename' or provide a named function "
                     f"different from the existing nodes."
                 )
@@ -225,7 +234,7 @@ class Task(metaclass=TaskMeta):
 
             # add the processed function to the graph
             logger.debug(f"Adding node '{fn_name}' to graph")
-            self._graph.add_node(fn_name, **{FN_ATTRIBUTE: fn_processed})
+            self._graph.add_node(fn_name, **{FUNC_ATTRIBUTE: fn_processed, TYPE_ATTRIBUTE: NodeType.FUNCTION})
 
             # make sure the fn's parameters are nodes in the graph
             for param in params:
@@ -252,7 +261,7 @@ class Task(metaclass=TaskMeta):
         for key, value in kwargs.items():
             logger.debug(f"Registering node {key}")
             lazy_value: Callable[[Any], Any] = lambda v=value: v
-            self._graph.add_node(key, **{FN_ATTRIBUTE: lazy_value})
+            self._graph.add_node(key, **{FUNC_ATTRIBUTE: lazy_value, TYPE_ATTRIBUTE: NodeType.ATTRIBUTE})
 
     def run(self, node: Optional[str] = None) -> Any:
         """Run the full task if no `node` is given, otherwise run up until `node`.
@@ -294,8 +303,8 @@ class Task(metaclass=TaskMeta):
         logger.debug(f"Determined split kwarg: {kwarg_split}")
         logger.debug(f"Determined map kwarg: {kwarg_map}\n")
 
-        assert FN_ATTRIBUTE in current_node, f"Node '{node}' not defined, but set as a dependency."
-        fn = current_node[FN_ATTRIBUTE]
+        assert FUNC_ATTRIBUTE in current_node, f"Node '{node}' not defined, but set as a dependency."
+        fn = current_node[FUNC_ATTRIBUTE]
 
         if kwarg_split is not None:
             result = self._parallel()(delayed(fn)(**kwargs, **arg) for arg in kwarg_split)
