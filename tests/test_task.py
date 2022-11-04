@@ -87,6 +87,16 @@ def test_combine_nodes(n_nodes, data):
         assert r == data
 
 
+@given(data=text)
+def test_string_args_kwargs(data):
+    task = Task()
+    task.register(data=data)
+    task.step(lambda *args: args[0], args="data", rename="args")
+    task.step(lambda **kwargs: list(kwargs.values())[0], kwargs="data", rename="kwargs")
+    for result in task.run():
+        assert result == data
+
+
 @given(n_nodes=int_gt_1_lt_max, data=anything)
 def test_run_nodes(n_nodes, data):
     task = Task()
@@ -122,6 +132,9 @@ def test_assertions():
     def fn_kwargs(x, **kwargs):
         ...
 
+    def fn_args_kwargs(*args, **kwargs):
+        ...
+
     # step
     with pytest.raises(AssertionError, match="Cannot add already existing node"):
         task = Task()
@@ -143,6 +156,10 @@ def test_assertions():
     with pytest.raises(AssertionError, match=escape("The names provided to 'kwargs' cannot be duplicates")):
         task = Task()
         task.step(fn=fn_kwargs, kwargs=["x"])
+
+    with pytest.raises(AssertionError, match=escape("There cannot be duplicate names provided to 'args' and 'kwargs'")):
+        task = Task()
+        task.step(fn=fn_args_kwargs, args="x", kwargs="x")
 
     with pytest.raises(AssertionError, match="Cannot combine 'split' and 'map'"):
         task = Task()
