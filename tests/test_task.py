@@ -87,6 +87,23 @@ def test_combine_nodes(n_nodes, data):
         assert r == data
 
 
+@given(n_nodes=int_gt_1_lt_max, data=anything)
+def test_run_nodes(n_nodes, data):
+    task = Task()
+    task.register(data=data)
+    repeated_identity = lambda repeats: lambda data: tuple(data for _ in range(repeats))
+    nodes = [f"identity_{n}" for n in range(n_nodes)]
+    for i, node in enumerate(nodes):
+        task.step(fn=repeated_identity(i), rename=node)
+
+    # each node should return the identity repeated `i` times
+    for repeats, node in enumerate(nodes):
+        result = task.run(node)
+        assert len(result) == repeats
+        for item in result:
+            assert data == item
+
+
 @given(alias=text, data=anything)
 def test_aliasing(alias, data):
     task = Task()
@@ -148,6 +165,12 @@ def test_assertions():
     with pytest.raises(AssertionError, match=f"Node 'x' not defined, but set as a dependency."):
         task = Task()
         task.step(fn=fn)
+        task.run()
+
+    with pytest.raises(AssertionError, match=f"Cannot verify that predicate 'is_iterable' holds"):
+        task = Task()
+        task.register(x=1)
+        task.step(fn=fn, split="x")
         task.run()
 
     # run
