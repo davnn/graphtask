@@ -18,9 +18,16 @@ except ImportError as err:  # pragma: no cover
 
 __all__ = ["to_pygraphviz"]
 
+_GRAPH_LAYOUT = "dot"
 _GRAPH_ATTRIBUTES = {"rankdir": "TB", "bgcolor": "white"}
-_NODE_ATTRIBUTES = {"color": "black", "fontcolor": "black"}
-_EDGE_ATTRIBUTES = {"color": "black"}
+_NODE_ATTRIBUTES = {
+    "color": "#f0f0f0",
+    "style": "filled",
+    "fontcolor": "#111111",
+    "shape": "box",
+    "fontsize": 10,
+}
+_EDGE_ATTRIBUTES = {"color": "black", "arrowsize": 2 / 3}
 
 
 @overload
@@ -52,4 +59,5 @@ def to_pygraphviz(graph: Union[Task, nx.DiGraph]) -> pg.AGraph:
         edge = agraph.get_edge(u, v)
         edge.attr.update(_EDGE_ATTRIBUTES)
 
+    agraph.layout(_GRAPH_LAYOUT)
     return agraph
