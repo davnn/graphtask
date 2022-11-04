@@ -107,12 +107,11 @@ class TaskMeta(type):
         for attr_name in dir(obj):
             attr = getattr(obj, attr_name)
 
-            # short circuit all attributes that are not callable and don't contain the __step__ attributes
-            if not callable(attr) or not hasattr(attr, "__step__"):
-                continue
+            # only add steps for attributes that are callable and contain the __step__ attribute
+            if callable(attr) and hasattr(attr, "__step__"):
+                kwargs = getattr(attr, "__step__")
+                obj.step(attr, **kwargs)
 
-            kwargs = getattr(attr, "__step__")
-            obj.step(attr, **kwargs)
         return obj
 
 
@@ -195,7 +194,16 @@ class Task(metaclass=TaskMeta):
 
             # rename the node if `rename` is given
             fn_name = fn.__name__ if rename is None else rename
-            assert fn_name != "<lambda>", "Cannot name node '<lambda>', use 'rename' or provide a named function."
+
+            # 1. A node can be `defined`, meaning that the name of the node is already in the graph, but there is
+            # no corresponding function available for the node. This is the case if a node is referred to before
+            # the function is declared.
+            # 2. A node can be `initialized`, meaning that the node in the graph has a `__function__` attribute
+            if fn_name in self._graph.nodes:
+                assert "__function__" not in self._graph.nodes[fn_name], (
+                    f"Cannot add already existing node '{fn_name}' to graph, use 'rename' or provide a named function "
+                    f"different from the existing nodes."
+                )
 
             def fn_processed(**passed: Any) -> Any:
                 """A closure function, that re-arranges the passed keyword arguments into positional-only, variable
@@ -207,6 +215,7 @@ class Task(metaclass=TaskMeta):
                 Returns:
                     Return value of the original (unprocessed) function.
                 """
+                invert_alias_step_parameters(passed, alias)
                 positional = process_positional_args(passed, original_posargs)
                 return fn(*positional, **passed)
 
@@ -501,6 +510,15 @@ def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) 
         for param in params_to_replace:
             params.remove(param)
             params.add(alias[param])
+
+
+def invert_alias_step_parameters(params: dict[str, Any], alias: Optional[Mapping[str, str]]) -> None:
+    """Undo renaming of function parameters, i.e. for the passed `params` change the aliased keys to original keys."""
+    if alias is not None:
+        inverse_alias = {v: k for k, v in alias.items()}
+        keys_to_rename = (key for key in inverse_alias.keys() if key in params)
+        for key in keys_to_rename:
+            params[inverse_alias[key]] = params.pop(key)
 
 
 def verify_step_parameters(params: set[str], split: Optional[str], map: Optional[str]) -> None:

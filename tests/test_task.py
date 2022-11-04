@@ -87,9 +87,15 @@ def test_combine_nodes(n_nodes, data):
         assert r == data
 
 
-def test_assertions():
+@given(alias=text, data=anything)
+def test_aliasing(alias, data):
     task = Task()
+    task.register(**{alias: data})
+    task.step(fn=identity, alias={"data": alias})
+    assert data == task.run()
 
+
+def test_assertions():
     def fn(x):
         ...
 
@@ -100,9 +106,10 @@ def test_assertions():
         ...
 
     # step
-    with pytest.raises(AssertionError, match="Cannot name node '<lambda>'"):
+    with pytest.raises(AssertionError, match="Cannot add already existing node"):
         task = Task()
-        task.step(fn=lambda: None)
+        task.step(fn=identity)
+        task.step(fn=identity)
 
     with pytest.raises(AssertionError, match=escape("Variable argument '*args' requires 'args' parameter")):
         task = Task()
@@ -134,8 +141,8 @@ def test_assertions():
 
     with pytest.raises(AssertionError, match="Cannot verify that predicate 'is_dag' holds"):
         task = Task()
-        task.step(lambda: None, rename="cyclic")
-        task.step(lambda cyclic: None, rename="cyclic")
+        task.step(lambda b: None, rename="a")
+        task.step(lambda a: None, rename="b")
 
     # materialize
     with pytest.raises(AssertionError, match=f"Node 'x' not defined, but set as a dependency."):
@@ -149,7 +156,7 @@ def test_assertions():
         task.run(node="missing")
 
     with pytest.raises(AssertionError, match="Cannot verify that predicate 'is_dag' holds"):
-        # this should only happen if a user messes with the underlying `_graph`
+        # should only happen if a user messes with the underlying `_graph`, otherwise should already fail in `step`
         task = Task()
         task._graph.add_edges_from([("cyclic", "cyclic")])
         task.run()
