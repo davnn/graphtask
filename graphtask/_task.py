@@ -7,6 +7,7 @@ import inspect
 import logging
 import warnings
 from collections.abc import Callable, Hashable, Iterable, Mapping
+from enum import Enum
 from sys import maxsize
 
 import networkx as nx
@@ -24,6 +25,18 @@ ArgsT = dict[str, Any]
 SplitArgsT = list[ArgsT]
 MapArgsT = dict[Hashable, ArgsT]
 
+FUNC_ATTRIBUTE = "__func__"
+DATA_ATTRIBUTE = "__data__"
+STEP_ATTRIBUTE = "__step__"
+TYPE_ATTRIBUTE = "__type__"
+
+
+class NodeType(Enum):
+    """The kind of node stored in `TYPE_ATTRIBUTE` of a node."""
+
+    ATTRIBUTE = 1
+    FUNCTION = 2
+
 
 @overload
 def step(
@@ -32,8 +45,8 @@ def step(
     split: Optional[str] = None,
     map: Optional[str] = None,
     rename: Optional[str] = None,
-    args: Optional[Iterable[str]] = None,
-    kwargs: Optional[Iterable[str]] = None,
+    args: Optional[Union[str, Iterable[str]]] = None,
+    kwargs: Optional[Union[str, Iterable[str]]] = None,
     alias: Optional[Mapping[str, str]] = None,
 ) -> DecorableT:
     """Step invoked with a `fn`, returns the `fn`"""
@@ -46,8 +59,8 @@ def step(
     split: Optional[str] = None,
     map: Optional[str] = None,
     rename: Optional[str] = None,
-    args: Optional[Iterable[str]] = None,
-    kwargs: Optional[Iterable[str]] = None,
+    args: Optional[Union[str, Iterable[str]]] = None,
+    kwargs: Optional[Union[str, Iterable[str]]] = None,
     alias: Optional[Mapping[str, str]] = None,
 ) -> Callable[[DecorableT], DecorableT]:
     """Step invoked without a `fn`, return a decorator"""
@@ -60,8 +73,8 @@ def step(
     split: Optional[str] = None,
     map: Optional[str] = None,
     rename: Optional[str] = None,
-    args: Optional[Iterable[str]] = None,
-    kwargs: Optional[Iterable[str]] = None,
+    args: Optional[Union[str, Iterable[str]]] = None,
+    kwargs: Optional[Union[str, Iterable[str]]] = None,
     alias: Optional[Mapping[str, str]] = None,
 ) -> Union[DecorableT, Callable[[DecorableT], DecorableT]]:
     """A method decorator (or decorator factory) to add steps to the graph of a class inheriting from `Task`.
@@ -79,7 +92,7 @@ def step(
         A decorator if no `fn` is given, otherwise `fn`."""
 
     def decorator(fn: DecorableT) -> DecorableT:
-        setattr(fn, "__step__", dict(split=split, map=map, rename=rename, args=args, kwargs=kwargs, alias=alias))
+        setattr(fn, STEP_ATTRIBUTE, dict(split=split, map=map, rename=rename, args=args, kwargs=kwargs, alias=alias))
         return fn
 
     if callable(fn):
@@ -91,11 +104,11 @@ def step(
 
 
 class TaskMeta(type):
-    """A metaclass to enable classes inheriting from `Task` to use the `@step` decorator, which sets a `__step__`
+    """A metaclass to enable classes inheriting from `Task` to use the `@step` decorator, which sets a `STEP_ATTRIBUTE`
     attribute on each decorated method containing `kwargs` to `@step` for the decorated method.
 
     On an `__init__` call of a class inheriting from `Task`, the metaclass iterates over all methods containing the
-    `__step__` attribute and adds them as 'real' steps of the `Task`. For an explanation of why this works, see:
+    `STEP_ATTRIBUTE` and adds them as 'real' steps of the `Task`. For an explanation of why this works, see:
     https://stackoverflow.com/questions/16017397/injecting-function-call-after-init-with-decorator
     """
 
@@ -107,12 +120,11 @@ class TaskMeta(type):
         for attr_name in dir(obj):
             attr = getattr(obj, attr_name)
 
-            # short circuit all attributes that are not callable and don't contain the __step__ attributes
-            if not callable(attr) or not hasattr(attr, "__step__"):
-                continue
+            # only add steps for attributes that are callable and contain the `STEP_ATTRIBUTE`
+            if callable(attr) and hasattr(attr, STEP_ATTRIBUTE):
+                kwargs = getattr(attr, STEP_ATTRIBUTE)
+                obj.step(attr, **kwargs)
 
-            kwargs = getattr(attr, "__step__")
-            obj.step(attr, **kwargs)
         return obj
 
 
@@ -136,8 +148,8 @@ class Task(metaclass=TaskMeta):
         split: Optional[str] = None,
         map: Optional[str] = None,
         rename: Optional[str] = None,
-        args: Optional[Iterable[str]] = None,
-        kwargs: Optional[Iterable[str]] = None,
+        args: Optional[Union[str, Iterable[str]]] = None,
+        kwargs: Optional[Union[str, Iterable[str]]] = None,
         alias: Optional[Mapping[str, str]] = None,
     ) -> DecorableT:
         """Step invoked with a `fn`, returns the `fn`"""
@@ -150,8 +162,8 @@ class Task(metaclass=TaskMeta):
         split: Optional[str] = None,
         map: Optional[str] = None,
         rename: Optional[str] = None,
-        args: Optional[Iterable[str]] = None,
-        kwargs: Optional[Iterable[str]] = None,
+        args: Optional[Union[str, Iterable[str]]] = None,
+        kwargs: Optional[Union[str, Iterable[str]]] = None,
         alias: Optional[Mapping[str, str]] = None,
     ) -> Callable[[DecorableT], DecorableT]:
         """Step invoked without a `fn`, return a decorator"""
@@ -164,8 +176,8 @@ class Task(metaclass=TaskMeta):
         split: Optional[str] = None,
         map: Optional[str] = None,
         rename: Optional[str] = None,
-        args: Optional[Iterable[str]] = None,
-        kwargs: Optional[Iterable[str]] = None,
+        args: Optional[Union[str, Iterable[str]]] = None,
+        kwargs: Optional[Union[str, Iterable[str]]] = None,
         alias: Optional[Mapping[str, str]] = None,
     ) -> Union[DecorableT, Callable[[DecorableT], DecorableT]]:
         """A function decorator (or decorator factory) to add steps to the graph.
@@ -195,7 +207,16 @@ class Task(metaclass=TaskMeta):
 
             # rename the node if `rename` is given
             fn_name = fn.__name__ if rename is None else rename
-            assert fn_name != "<lambda>", "Cannot name node '<lambda>', use 'rename' or provide a named function."
+
+            # 1. A node can be `defined`, meaning that the name of the node is already in the graph, but there is
+            # no corresponding function available for the node. This is the case if a node is referred to before
+            # the function is declared.
+            # 2. A node can be `initialized`, meaning that the node in the graph has an existing `FUNC_ATTRIBUTE`.
+            if fn_name in self._graph.nodes:
+                assert FUNC_ATTRIBUTE not in self._graph.nodes[fn_name], (
+                    f"Cannot add already existing node '{fn_name}' to graph, use 'rename' or provide a named function "
+                    f"different from the existing nodes."
+                )
 
             def fn_processed(**passed: Any) -> Any:
                 """A closure function, that re-arranges the passed keyword arguments into positional-only, variable
@@ -207,12 +228,13 @@ class Task(metaclass=TaskMeta):
                 Returns:
                     Return value of the original (unprocessed) function.
                 """
+                invert_alias_step_parameters(passed, alias)
                 positional = process_positional_args(passed, original_posargs)
                 return fn(*positional, **passed)
 
             # add the processed function to the graph
             logger.debug(f"Adding node '{fn_name}' to graph")
-            self._graph.add_node(fn_name, __function__=fn_processed, __shape__="box")
+            self._graph.add_node(fn_name, **{FUNC_ATTRIBUTE: fn_processed, TYPE_ATTRIBUTE: NodeType.FUNCTION})
 
             # make sure the fn's parameters are nodes in the graph
             for param in params:
@@ -239,7 +261,7 @@ class Task(metaclass=TaskMeta):
         for key, value in kwargs.items():
             logger.debug(f"Registering node {key}")
             lazy_value: Callable[[Any], Any] = lambda v=value: v
-            self._graph.add_node(key, __function__=lazy_value, __shape__="point")
+            self._graph.add_node(key, **{FUNC_ATTRIBUTE: lazy_value, TYPE_ATTRIBUTE: NodeType.ATTRIBUTE})
 
     def run(self, node: Optional[str] = None) -> Any:
         """Run the full task if no `node` is given, otherwise run up until `node`.
@@ -266,7 +288,7 @@ class Task(metaclass=TaskMeta):
         return result[0] if len(result) == 1 else tuple(result)
 
     def _materialize(self, node: Hashable) -> Any:
-        """Materialize the result of calling a node as an edge weight stored in `__data__`.
+        """Materialize the result of calling a node as an edge weight stored in `DATA_ATTRIBUTE`.
 
         Args:
             node: Identifier of the node to materialize.
@@ -276,17 +298,14 @@ class Task(metaclass=TaskMeta):
         """
         current_node = self._graph.nodes[node]
         logger.debug(f"Current node:        {repr(node)}")
-
-        # short circuit if there is already valid data
-        # if "__data__" in current_node:
-        #     return current_node["__data__"]
         kwargs, kwarg_split, kwarg_map = predecessor_edges(self._graph, node)
         logger.debug(f"Determined kwargs: {kwargs}")
         logger.debug(f"Determined split kwarg: {kwarg_split}")
         logger.debug(f"Determined map kwarg: {kwarg_map}\n")
 
-        assert "__function__" in current_node, f"Node '{node}' not defined, but set as a dependency."
-        fn = current_node["__function__"]
+        assert FUNC_ATTRIBUTE in current_node, f"Node '{node}' not defined, but set as a dependency."
+        fn = current_node[FUNC_ATTRIBUTE]
+
         if kwarg_split is not None:
             result = self._parallel()(delayed(fn)(**kwargs, **arg) for arg in kwarg_split)
         elif kwarg_map is not None:
@@ -296,7 +315,7 @@ class Task(metaclass=TaskMeta):
             result = fn(**kwargs)
 
         # add the materialized result to the node
-        current_node["__data__"] = result
+        current_node[DATA_ATTRIBUTE] = result
 
         # return the materialized result
         return result
@@ -351,7 +370,7 @@ def predecessor_edges(graph: nx.DiGraph, node: Hashable) -> tuple[ArgsT, Optiona
 
     for key, edge in edges.items():
         key = cast(str, key)  # we only use str keys
-        data = graph.nodes[key]["__data__"]
+        data = graph.nodes[key][DATA_ATTRIBUTE]
         if edge["split"]:
             kwarg_split = split_arg(key, data)
         elif edge["map"]:
@@ -395,7 +414,9 @@ def process_positional_args(passed: dict[str, Any], pos_args: list[str]) -> list
 
 
 def split_step_params(
-    params: list[inspect.Parameter], args: Optional[Iterable[str]], kwargs: Optional[Iterable[str]]
+    params: list[inspect.Parameter],
+    args: Optional[Union[str, Iterable[str]]],
+    kwargs: Optional[Union[str, Iterable[str]]],
 ) -> tuple[list[str], list[str]]:
     """Split positional and keyword arguments from `params`.
 
@@ -423,28 +444,37 @@ def split_step_params(
         # replace the *args and **kwargs param with a list of replacements
         if kind == inspect.Parameter.VAR_POSITIONAL:
             assert args is not None, f"Variable argument '*{name}' requires 'args' parameter to be set in 'step'."
-            param_names.append(list(args))
+            args = [args] if isinstance(args, str) else list(args)
+            param_names.append(args)
             has_var_arg = True
         elif kind == inspect.Parameter.VAR_KEYWORD:
             assert kwargs is not None, f"Variable argument '**{name}' requires 'kwargs' parameter to be set in 'step'."
-            param_names.append(list(kwargs))
+            kwargs = [kwargs] if isinstance(kwargs, str) else list(kwargs)
+            param_names.append(kwargs)
             has_var_kwarg = True
         else:
             param_names.append(name)
 
+    # validate the input to `args` and `kwargs`
     if has_var_arg and args is not None:
         duplicates = [arg for arg in args if arg in param_names]
         assert not any(duplicates), (
             f"The names provided to 'args' cannot be duplicates of the "
-            f"function parameters, but found duplicates: '{duplicates}'"
+            f"function parameters, but found duplicates: '{duplicates}'."
         )
 
     if has_var_kwarg and kwargs is not None:
         duplicates = [arg for arg in kwargs if arg in param_names]
         assert not any(duplicates), (
             f"The names provided to 'kwargs' cannot be duplicates of the "
-            f"function parameters, but found duplicates: '{duplicates}'"
+            f"function parameters, but found duplicates: '{duplicates}'."
         )
+
+    if args is not None and kwargs is not None:
+        duplicates = [arg for arg in args if arg in kwargs]
+        assert not any(
+            duplicates
+        ), f"There cannot be duplicate names provided to 'args' and 'kwargs', but found duplicates: '{duplicates}."
 
     if args is not None and not has_var_arg:
         warnings.warn("Provided 'args' argument for 'step', but no '*args' parameter found.")
@@ -501,6 +531,15 @@ def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) 
         for param in params_to_replace:
             params.remove(param)
             params.add(alias[param])
+
+
+def invert_alias_step_parameters(params: dict[str, Any], alias: Optional[Mapping[str, str]]) -> None:
+    """Undo renaming of function parameters, i.e. for the passed `params` change the aliased keys to original keys."""
+    if alias is not None:
+        inverse_alias = {v: k for k, v in alias.items()}
+        keys_to_rename = (key for key in inverse_alias.keys() if key in params)
+        for key in keys_to_rename:
+            params[inverse_alias[key]] = params.pop(key)
 
 
 def verify_step_parameters(params: set[str], split: Optional[str], map: Optional[str]) -> None:

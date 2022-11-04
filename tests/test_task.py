@@ -87,9 +87,42 @@ def test_combine_nodes(n_nodes, data):
         assert r == data
 
 
-def test_assertions():
+@given(data=text)
+def test_string_args_kwargs(data):
     task = Task()
+    task.register(data=data)
+    task.step(lambda *args: args[0], args="data", rename="args")
+    task.step(lambda **kwargs: list(kwargs.values())[0], kwargs="data", rename="kwargs")
+    for result in task.run():
+        assert result == data
 
+
+@given(n_nodes=int_gt_1_lt_max, data=anything)
+def test_run_nodes(n_nodes, data):
+    task = Task()
+    task.register(data=data)
+    repeated_identity = lambda repeats: lambda data: tuple(data for _ in range(repeats))
+    nodes = [f"identity_{n}" for n in range(n_nodes)]
+    for i, node in enumerate(nodes):
+        task.step(fn=repeated_identity(i), rename=node)
+
+    # each node should return the identity repeated `i` times
+    for repeats, node in enumerate(nodes):
+        result = task.run(node)
+        assert len(result) == repeats
+        for item in result:
+            assert data == item
+
+
+@given(alias=text, data=anything)
+def test_aliasing(alias, data):
+    task = Task()
+    task.register(**{alias: data})
+    task.step(fn=identity, alias={"data": alias})
+    assert data == task.run()
+
+
+def test_assertions():
     def fn(x):
         ...
 
@@ -99,10 +132,14 @@ def test_assertions():
     def fn_kwargs(x, **kwargs):
         ...
 
+    def fn_args_kwargs(*args, **kwargs):
+        ...
+
     # step
-    with pytest.raises(AssertionError, match="Cannot name node '<lambda>'"):
+    with pytest.raises(AssertionError, match="Cannot add already existing node"):
         task = Task()
-        task.step(fn=lambda: None)
+        task.step(fn=identity)
+        task.step(fn=identity)
 
     with pytest.raises(AssertionError, match=escape("Variable argument '*args' requires 'args' parameter")):
         task = Task()
@@ -120,6 +157,10 @@ def test_assertions():
         task = Task()
         task.step(fn=fn_kwargs, kwargs=["x"])
 
+    with pytest.raises(AssertionError, match=escape("There cannot be duplicate names provided to 'args' and 'kwargs'")):
+        task = Task()
+        task.step(fn=fn_args_kwargs, args="x", kwargs="x")
+
     with pytest.raises(AssertionError, match="Cannot combine 'split' and 'map'"):
         task = Task()
         task.step(fn=fn, split="data", map="data")
@@ -134,13 +175,19 @@ def test_assertions():
 
     with pytest.raises(AssertionError, match="Cannot verify that predicate 'is_dag' holds"):
         task = Task()
-        task.step(lambda: None, rename="cyclic")
-        task.step(lambda cyclic: None, rename="cyclic")
+        task.step(lambda b: None, rename="a")
+        task.step(lambda a: None, rename="b")
 
     # materialize
     with pytest.raises(AssertionError, match=f"Node 'x' not defined, but set as a dependency."):
         task = Task()
         task.step(fn=fn)
+        task.run()
+
+    with pytest.raises(AssertionError, match=f"Cannot verify that predicate 'is_iterable' holds"):
+        task = Task()
+        task.register(x=1)
+        task.step(fn=fn, split="x")
         task.run()
 
     # run
@@ -149,7 +196,7 @@ def test_assertions():
         task.run(node="missing")
 
     with pytest.raises(AssertionError, match="Cannot verify that predicate 'is_dag' holds"):
-        # this should only happen if a user messes with the underlying `_graph`
+        # should only happen if a user messes with the underlying `_graph`, otherwise should already fail in `step`
         task = Task()
         task._graph.add_edges_from([("cyclic", "cyclic")])
         task.run()

@@ -44,7 +44,10 @@ def test_fn_signatures(a, b, c, d):
 
     task = Task()
     task.register(a=a, b=b, c=c, d=d)
-    for fn in [fn1, fn2, fn3, fn4, fn5, fn6, fn7, fn8, fn9, fn10, fn11]:
+    for fn in [fn1, fn2, fn3, fn4, fn5, fn6, fn7, fn8]:
+        task.step(fn=fn)
+
+    for fn in [fn9, fn10, fn11]:
         task.step(fn=fn, args=["c"], kwargs=["d"])
 
     for result in task.run():
