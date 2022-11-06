@@ -9,4 +9,4 @@
 [![Semantic Versions](https://img.shields.io/badge/%20%20%F0%9F%93%A6%F0%9F%9A%80-semantic--versions-e10079.svg)](https://github.com/davnn/graphtask/releases)
 ![Coverage Report](assets/images/coverage.svg)
 
-The project roughly follows the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html).
+This project follows the [Numpy documentation styleguide](https://numpydoc.readthedocs.io/en/latest/format.html).

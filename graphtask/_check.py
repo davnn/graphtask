@@ -11,15 +11,20 @@ __all__ = ["is_dag", "is_iterable", "is_mapping", "verify"]
 
 
 def is_iterable(iterable: Any) -> bool:
-    """
-    Check if `iterable` is iterable, by invoking `inter`. This is more reliable than `isinstance(iterable, Iterable)`,
-    see: https://docs.python.org/3/library/collections.abc.html#collections.abc.Iterable
+    """Check if ``iterable`` is iterable, by trying to invoke ``iter``.
 
-    Args:
-        iterable: A value that may be iterable.
+    Invoker ``iter`` is more reliable than `isinstance(iterable, Iterable)`, see:
+    https://docs.python.org/3/library/collections.abc.html#collections.abc.Iterable
 
-    Returns:
-        `True` if `iterable` is iterable, otherwise `False`.
+    Parameters
+    ----------
+    iterable: Any
+        Any value that may be iterable.
+
+    Returns
+    -------
+    bool
+        ``True`` if ``iterable`` is iterable, otherwise ``False``.
     """
     try:
         iter(iterable)
@@ -29,33 +34,42 @@ def is_iterable(iterable: Any) -> bool:
 
 
 def is_mapping(mapping: Any) -> bool:
-    """
-    Check if `mapping` is a mapping type based on `Mapping`
+    """Check if given `mapping` is a mapping type, which it is, if it is an instance of `Mapping`
 
-    Args:
-        mapping: A value that may be a mapping.
+    Parameters
+    ----------
+    mapping: Any
+        Any value that may be a mapping.
 
-    Returns:
-        `True` if `iterable` is an instance of `Mapping`, otherwise `False`.
+    Returns
+    -------
+    bool
+        ``True`` if ``mapping`` is an instance of ``Mapping``, otherwise ``False``.
     """
     return isinstance(mapping, Mapping)
 
 
 def is_dag(graph: nx.DiGraph) -> bool:
-    """Determine if `graph` is directed and acyclic."""
+    """Determine if ``graph`` is directed and acyclic."""
     return nx.is_directed_acyclic_graph(graph)
 
 
 def verify(predicate: Callable[..., bool], *args: Any, **kwargs: Any):
-    """Assert that a `predicate` function (bool return) holds given `*args` and `**kwargs`.
+    """Assert that a predicate function (bool return) holds given ``*args`` and ``**kwargs``.
 
-    Args:
-        predicate: Function returning `True` or `False`
-        *args: Positional arguments to `predicate`.
-        **kwargs: Keyword arguments to `predicate`.
+    Parameters
+    ----------
+    predicate: callable of *args, **kwargs to bool
+        Function returning ``True`` or ``False``
+    args: Any
+        Positional arguments to ``predicate``.
+    kwargs: Any
+        Keyword arguments to ``predicate``.
 
-    Raises:
-        AssertionError: If the `predicate` function does not hold (returns False).
+    Raises
+    ------
+    AssertionError
+        If the ``predicate`` function does not hold (returns False).
     """
     proposition = predicate(*args, **kwargs)
     assert proposition, f"Cannot verify that predicate '{predicate.__name__}' holds for arguments: {args} {kwargs}."
