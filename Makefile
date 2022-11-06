@@ -91,7 +91,7 @@ doctest:
 	poetry run sphinx-build -b doctest docs docs/_build/doctest
 
 autodocs:
-	poetry run sphinx-autobuild docs docs/_build/html --watch $(PROJECT) --open-browser
+	poetry run sphinx-autobuild docs docs/_build/html --watch $(PROJECT) --watch examples --ignore docs/_gallery --open-browser
 
 #* Cleaning
 .PHONY: pycache-remove
