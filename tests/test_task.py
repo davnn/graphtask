@@ -135,18 +135,6 @@ def test_assertions():
     def fn_args_kwargs(*args, **kwargs):
         ...
 
-    # register
-    with pytest.raises(AssertionError, match="Cannot register already existing node"):
-        task = Task()
-        task.step(fn=identity)
-        task.register(identity=1)
-
-    # step
-    with pytest.raises(AssertionError, match="Cannot add already existing node"):
-        task = Task()
-        task.step(fn=identity)
-        task.step(fn=identity)
-
     with pytest.raises(AssertionError, match=escape("Variable argument '*args' requires 'args' parameter")):
         task = Task()
         task.step(fn=lambda *args: args)

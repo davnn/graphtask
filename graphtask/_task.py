@@ -204,7 +204,7 @@ class Task(metaclass=TaskMeta):
         kwargs: Optional[Union[str, Iterable[str]]] = None,
         alias: Optional[Mapping[str, str]] = None,
     ) -> Union[DecorableT, Callable[[DecorableT], DecorableT]]:
-        """A function decorator (or decorator factory) to add steps to the graph (documented at ``graphtask.step``)"""
+        """A decorator (or decorator factory) to add steps to the graph (documented at :meth:`graphtask.step`)"""
 
         def decorator(fn: DecorableT) -> DecorableT:
             params = get_function_params(fn)
@@ -218,16 +218,6 @@ class Task(metaclass=TaskMeta):
 
             # rename the node if `rename` is given
             fn_name = fn.__name__ if rename is None else rename
-
-            # 1. A node can be `defined`, meaning that the name of the node is already in the graph, but there is
-            # no corresponding function available for the node. This is the case if a node is referred to before
-            # the function is declared.
-            # 2. A node can be `initialized`, meaning that the node in the graph has an existing `FUNC_ATTRIBUTE`.
-            if fn_name in self._graph.nodes:
-                assert FUNC_ATTRIBUTE not in self._graph.nodes[fn_name], (
-                    f"Cannot add already existing node '{fn_name}' to graph, use 'rename' or provide a named function "
-                    f"different from the existing nodes."
-                )
 
             def fn_processed(**passed: Any) -> Any:
                 """A closure function, that re-arranges the passed keyword arguments into positional-only, variable
@@ -276,16 +266,8 @@ class Task(metaclass=TaskMeta):
             Each provided key identifies a node on the graph. For example ``task.register(a=1)`` would register the
             node ``"a"`` on the graph with a value of ``1``. The value is registered lazily, such that there is no
             difference between nodes registered using ``register`` or ``step``.
-
-        Raises
-        ------
-        AssertionError
-            If one of the nodes to register is already found in the graph.
         """
         for key, value in kwargs.items():
-            if key in self._graph.nodes:
-                assert FUNC_ATTRIBUTE not in self._graph.nodes[key], f"Cannot register already existing node '{key}'."
-
             logger.debug(f"Registering node {key}")
             lazy_value: Callable[[Any], Any] = lambda v=value: v
             self._graph.add_node(key, **{FUNC_ATTRIBUTE: lazy_value, TYPE_ATTRIBUTE: NodeType.ATTRIBUTE})
