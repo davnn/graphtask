@@ -4,6 +4,8 @@ Visualization of a `Task` using `pygraphviz`.
 """
 from typing import Union, overload
 
+from enum import Enum
+
 import networkx as nx
 
 from graphtask import Task
@@ -12,14 +14,15 @@ try:
     import pygraphviz as pg
 except ImportError as err:  # pragma: no cover
     raise ImportError(
-        "Graph visualisation requires 'pygraphviz' to be installed, but no installation found "
-        + "See http://pygraphviz.github.io/ for guidance."
+        "Graph visualisation requires 'pygraphviz' to be installed, but no installation found. See "
+        + "http://pygraphviz.github.io/ for guidance. If you install 'graphtask' with pip, use "
+        + "'pip install graphtask[visualize]' to install the optional dependencies."
     ) from err
 
-__all__ = ["to_pygraphviz"]
+__all__ = ["to_pygraphviz", "Orientation"]
 
 _GRAPH_LAYOUT = "dot"
-_GRAPH_ATTRIBUTES = {"rankdir": "TB", "bgcolor": "white"}
+_GRAPH_ATTRIBUTES = lambda orientation: {"rankdir": orientation, "bgcolor": "white"}
 _NODE_ATTRIBUTES = {
     "color": "#f0f0f0",
     "style": "filled",
@@ -28,6 +31,11 @@ _NODE_ATTRIBUTES = {
     "fontsize": 10,
 }
 _EDGE_ATTRIBUTES = {"color": "black", "arrowsize": 2 / 3}
+
+
+class Orientation(Enum):
+    VERTICAL = "TB"
+    HORIZONTAL = "LR"
 
 
 @overload
@@ -40,14 +48,14 @@ def to_pygraphviz(graph: nx.DiGraph) -> pg.AGraph:
     ...
 
 
-def to_pygraphviz(graph: Union[Task, nx.DiGraph]) -> pg.AGraph:
+def to_pygraphviz(graph: Union[Task, nx.DiGraph], orientation: Orientation = Orientation.VERTICAL) -> pg.AGraph:
     if isinstance(graph, Task):
         graph = graph._graph
 
     agraph = nx.nx_agraph.to_agraph(graph)
 
     # set graph attributes
-    agraph.graph_attr.update(_GRAPH_ATTRIBUTES)
+    agraph.graph_attr.update(_GRAPH_ATTRIBUTES(orientation))
 
     # set node attributes
     for v in graph.nodes:
