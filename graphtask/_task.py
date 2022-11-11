@@ -1,5 +1,5 @@
 """
-Definition of a `Task`.
+Definition of a `Task` and `step`.
 """
 from typing import Any, Optional, TypeVar, Union, cast, overload
 
@@ -12,9 +12,9 @@ from sys import maxsize
 
 import networkx as nx
 from joblib import Parallel, delayed
-from stackeddag.core import edgesToText, mkEdges, mkLabels  # type: ignore[reportUnknownVariableType]
 
 from graphtask._check import is_dag, is_iterable, is_mapping, verify
+from vendor.stackeddag import edgesToText, mkEdges, mkLabels
 
 logger = logging.getLogger(__name__)
 
@@ -79,17 +79,41 @@ def step(
 ) -> Union[DecorableT, Callable[[DecorableT], DecorableT]]:
     """A method decorator (or decorator factory) to add steps to the graph of a class inheriting from `Task`.
 
-    Args:
-        fn: The function to be decorated.
-        split: Iterable argument to invoke `fn` on each iterated value.
-        map: Mappable argument to invoke `fn` on each iterated value.
-        rename: Rename the node created with `fn`, default is `fn.__name__`.
-        args: Identifiers for variable positional arguments for `fn`.
-        kwargs: Identifiers for variable keyword arguments for `fn`.
-        alias: Rename arguments according to {"argument_name": "renamed_value"}.
+    Parameters
+    ----------
+    fn: optional callable
+        The method to be decorated, which gets added to the underlying ``Task``.
+    split: optional str
+        Iterable dependency to split and invoke ``fn`` on each iterated value. An iterable dependency must return an
+        ``Iterable``, for example a list of ``[value1, value2]``. If ``split`` is specified for the dependency, the
+        function is invoked as ``[fn(value1), fn(value2)]`` always returning a list.
+    map: optional str
+        Mappable dependency to invoke ``fn`` on each iterated value of the map. A mappable dependency must return a
+        ``Mapping``, for example a dictionary of ``{key1: value1, key2: value2}``. If ``map`` is specified for the
+        dependency, the function would only operate on the values and the return value of the node would look like
+        ``{key1: fn(value1), key2: fn(value2)}``.
+    rename: optional str
+        Rename the node in the graph created with ``fn``, the default node name is ``fn.__name__``. For lambda
+        functions, the ``fn.__name__`` is always ``<lambda>``, for example. Because node names have to be unique
+        in the graph, renaming is useful in certain scenarios.
+    args: optional iterable of str
+        Iterable of identifiers for variable positional arguments. This argument is required if ``*args`` is specified
+        for the given ``fn``. If ``args`` is ``["a", "b", "c"]``, it would inject the dependencies ``"a"``, ``"b"``
+        and ``"c"`` as positional arguments.
+    kwargs: optional iterable of str
+        Iterable of identifiers for variable keyword arguments. This argument is required if `*args` is specified
+        for the given ``fn``. If ``kwargs`` is ``["a", "b", "c"]``, it would inject the dependencies ``"a"``, ``"b"``
+        and ``"c"`` as keyword arguments.
+    alias: optional mapping of str to str
+        Rename arguments according to an ``{original: renamed}`` mapping. Aliasing happens after ``*args`` and
+        ``*kwargs`` have been injected, because ``*args`` and ``**kwargs`` are unique and the name of both arguments
+        is not processed further.
 
-    Returns:
-        A decorator if no `fn` is given, otherwise `fn`."""
+    Returns
+    -------
+    decorator or function
+        A decorator if no ``fn`` is given, otherwise ``fn``.
+    """
 
     def decorator(fn: DecorableT) -> DecorableT:
         setattr(fn, STEP_ATTRIBUTE, dict(split=split, map=map, rename=rename, args=args, kwargs=kwargs, alias=alias))
@@ -104,16 +128,16 @@ def step(
 
 
 class TaskMeta(type):
-    """A metaclass to enable classes inheriting from `Task` to use the `@step` decorator, which sets a `STEP_ATTRIBUTE`
-    attribute on each decorated method containing `kwargs` to `@step` for the decorated method.
+    """A metaclass to enable classes inheriting from `Task` to decorate methods using `@step`
 
-    On an `__init__` call of a class inheriting from `Task`, the metaclass iterates over all methods containing the
-    `STEP_ATTRIBUTE` and adds them as 'real' steps of the `Task`. For an explanation of why this works, see:
+    Decorating a method using ``@step`` sets a ``STEP_ATTRIBUTE`` on the decorated method containing ``kwargs`` to
+    ``@step`` for the method. On ``__init__`` of a class inheriting from ``Task``, the metaclass iterates over all
+    methods containing the ``STEP_ATTRIBUTE`` and adds them as steps of the ``Task``. For an explanation, see:
     https://stackoverflow.com/questions/16017397/injecting-function-call-after-init-with-decorator
     """
 
     def __call__(cls, *args: Any, **kwargs: Any):
-        """Called when you call MyNewClass()"""
+        """Called when you call Task()"""
         obj = type.__call__(cls, *args, **kwargs)
 
         # iterate over all the attribute names of the newly created object
@@ -129,7 +153,7 @@ class TaskMeta(type):
 
 
 class Task(metaclass=TaskMeta):
-    """A Task consists of `step`s that are implicitly modeled as a directed, acyclic graph (DAG)."""
+    """A Task consists of steps that are implicitly modeled as a directed, acyclic graph (DAG)."""
 
     def __init__(self, n_jobs: int = 1) -> None:
         super().__init__()
@@ -180,20 +204,7 @@ class Task(metaclass=TaskMeta):
         kwargs: Optional[Union[str, Iterable[str]]] = None,
         alias: Optional[Mapping[str, str]] = None,
     ) -> Union[DecorableT, Callable[[DecorableT], DecorableT]]:
-        """A function decorator (or decorator factory) to add steps to the graph.
-
-        Args:
-            fn: The function to be decorated.
-            split: Iterable argument to invoke `fn` on each iterated value.
-            map: Mappable argument to invoke `fn` on each iterated value.
-            rename: Rename the node created with `fn`, default is `fn.__name__`.
-            args: Identifiers for variable positional arguments for `fn`.
-            kwargs: Identifiers for variable keyword arguments for `fn`.
-            alias: Rename arguments according to {"argument_name": "renamed_value"}.
-
-        Returns:
-            A decorator if no `fn` is given, otherwise `fn`.
-        """
+        """A decorator (or decorator factory) to add steps to the graph (documented at :meth:`graphtask.step`)"""
 
         def decorator(fn: DecorableT) -> DecorableT:
             params = get_function_params(fn)
@@ -208,24 +219,18 @@ class Task(metaclass=TaskMeta):
             # rename the node if `rename` is given
             fn_name = fn.__name__ if rename is None else rename
 
-            # 1. A node can be `defined`, meaning that the name of the node is already in the graph, but there is
-            # no corresponding function available for the node. This is the case if a node is referred to before
-            # the function is declared.
-            # 2. A node can be `initialized`, meaning that the node in the graph has an existing `FUNC_ATTRIBUTE`.
-            if fn_name in self._graph.nodes:
-                assert FUNC_ATTRIBUTE not in self._graph.nodes[fn_name], (
-                    f"Cannot add already existing node '{fn_name}' to graph, use 'rename' or provide a named function "
-                    f"different from the existing nodes."
-                )
-
             def fn_processed(**passed: Any) -> Any:
                 """A closure function, that re-arranges the passed keyword arguments into positional-only, variable
                 positional and keyword arguments such that the signature of the original `fn` is respected.
 
-                Args:
-                    **passed: Keyword arguments from predecessor nodes.
+                Parameters
+                ----------
+                passed: Any
+                    Keyword arguments from predecessor nodes.
 
-                Returns:
+                Returns
+                -------
+                Any
                     Return value of the original (unprocessed) function.
                 """
                 invert_alias_step_parameters(passed, alias)
@@ -252,11 +257,15 @@ class Task(metaclass=TaskMeta):
             # use `step` as a decorator factory (return a decorator)
             return decorator
 
-    def register(self, **kwargs: Any):
+    def register(self, **kwargs: Any) -> None:
         """Register all keyword arguments with `key` and `value` as a node with identifier `key` on the graph.
 
-        Args:
-            **kwargs: Key/Values, where each key identifies a node on the graph.
+        Parameters
+        ----------
+        kwargs: keys to any values
+            Each provided key identifies a node on the graph. For example ``task.register(a=1)`` would register the
+            node ``"a"`` on the graph with a value of ``1``. The value is registered lazily, such that there is no
+            difference between nodes registered using ``register`` or ``step``.
         """
         for key, value in kwargs.items():
             logger.debug(f"Registering node {key}")
@@ -266,15 +275,24 @@ class Task(metaclass=TaskMeta):
     def run(self, node: Optional[str] = None) -> Any:
         """Run the full task if no `node` is given, otherwise run up until `node`.
 
-        Args:
-            node: Optional identifier of the `node` to run.
+        Parameters
+        ----------
+        node: optional str
+            Optional identifier of the ``node`` to run. This runs all dependencies of ``node`` and returns the
+            value returned by ``node``. If node is a function, this is equal to calling the function, though without
+            having to resolve all dependencies manually.
 
-        Returns:
-            Empty tuple if graph is empty, value of the last node if there is a single last node otherwise
-            a tuple of values of all last nodes.
+        Returns
+        -------
+        Any
+            The value of the last node if there is a single last node in the graph, otherwise a tuple of values of all
+            last nodes. If the graph is empty, an empty tuple is returned. If ``node`` is specified, the value of
+            the specified node is returned instead of the last node.
 
-        Raises:
-            AssertionError: If one of the assertions does not hold.
+        Raises
+        ------
+        AssertionError
+            If the specified ``node`` is not found in the graph.
         """
         verify(is_dag, self._graph)  # this assertion should always hold, except the user messes with `_graph`
         assert node is None or node in self._graph.nodes, f"The 'node' must be in Task, but did not find '{node}'."
@@ -290,10 +308,14 @@ class Task(metaclass=TaskMeta):
     def _materialize(self, node: Hashable) -> Any:
         """Materialize the result of calling a node as an edge weight stored in `DATA_ATTRIBUTE`.
 
-        Args:
-            node: Identifier of the node to materialize.
+        Parameters
+        ----------
+        node: Hashable
+            Identifier of the node to materialize.
 
-        Returns:
+        Returns
+        -------
+        Any
             The materialized value of the node.
         """
         current_node = self._graph.nodes[node]
@@ -320,7 +342,7 @@ class Task(metaclass=TaskMeta):
         # return the materialized result
         return result
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Task(n_jobs={self.n_jobs})"
 
     def __repr__(self) -> str:
@@ -346,17 +368,25 @@ class Task(metaclass=TaskMeta):
 
 def predecessor_edges(graph: nx.DiGraph, node: Hashable) -> tuple[ArgsT, Optional[SplitArgsT], Optional[MapArgsT]]:
     """Prepare the input data for `node` based on normal, `split` and `map` edges.
+
     The split edge (there can only be one) is transformed from {"key": [1, 2, ...]} to [{"key": 1}, {"key": 2}, ...].
     The map edge: {"key": {"map_key_1": 1, "map_key_2": 2}} -> {"map_key_1": {"key": 1}, "map_key_2": {"key": 2}, ...}.
 
-    Args:
-        graph: Directed acyclic graph.
-        node: Identifier of the node to predecessors.
+    Parameters
+    ----------
+    graph: DiGraph
+        A directed acyclic graph (DAG).
+    node: Hashable
+        Identifier of the node to predecessors.
 
-    Returns:
-        kwargs: Keyword arguments directly from edges that have not been processed.
-        split: Optional `split` argument.
-        map: Optional `map` arguments.
+    Returns
+    -------
+    dict[str, Any]
+        Keyword arguments directly from edges that have not been processed.
+    list[dict[str, Any]]
+        Optional `split` argument.
+    dict[Hashable, dict[str, Any]]
+        Optional `map` arguments.
     """
     direct_predecessors = list(graph.predecessors(node))
     logger.debug(f"Direct predecessors: {direct_predecessors}")
@@ -398,12 +428,17 @@ def split_arg(key: str, data: Iterable[Any]) -> SplitArgsT:
 def process_positional_args(passed: dict[str, Any], pos_args: list[str]) -> list[str]:
     """Process `passed` args to extract positional arguments and remove them from `passed` (the remaining kw-args).
 
-    Args:
-        passed: Original arguments passed as keyword arguments.
-        pos_args: Ordered identifiers of the positional only arguments.
+    Parameters
+    ----------
+    passed: dict[str, Any]
+        Original arguments passed as keyword arguments.
+    pos_args: list[str]
+        Ordered identifiers of the positional only arguments.
 
-    Returns:
-        pos_values: Ordered values of positional-only arguments.
+    Returns
+    -------
+    list[str]
+        Ordered values of positional-only arguments.
     """
     pos_values: list[str] = []
     for arg in pos_args:
@@ -423,14 +458,21 @@ def split_step_params(
     Note that an argument has to be supplied using a keyword if it follows a var-positional argument (following *args),
     if it is declared as a keyword only argument (following *) or if it declared as a variable keyword argument.
 
-    Args:
-        params: Initial inspected parameters.
-        args: Given `args` from `step`.
-        kwargs: Given `kwargs` from `step`.
+    Parameters
+    ----------
+    params: list of Parameter
+        Initial inspected parameters.
+    args: optional str iterable
+        Given `args` from `step`.
+    kwargs: optional str iterable
+        Given `kwargs` from `step`.
 
-    Returns:
-        positional: Positional arguments (can be `POSITIONAL_ONLY`, `POSITIONAL_OR_KEYWORD`, or `VAR_POSITIONAL`).
-        keyword: Keyword arguments
+    Returns
+    -------
+    list[str]
+        List of positional arguments.
+    list[str]
+        List of keyword arguments.
     """
     param_names: list[Union[str, list[str]]] = []
     param_kinds: list[inspect._ParameterKind] = []  # type:ignore[reportPrivateUsage]

@@ -39,22 +39,22 @@ pre-commit:
 #* Formatting
 .PHONY: format
 format:
-	poetry run pyupgrade --exit-zero-even-if-changed --py39-plus **/*.py
-	poetry run isort --settings-path pyproject.toml ./
-	poetry run black --config pyproject.toml ./
+	poetry run pyupgrade --exit-zero-even-if-changed --py39-plus $(PROJECT)/**.py
+	poetry run isort --settings-path pyproject.toml $(PROJECT)
+	poetry run black --config pyproject.toml $(PROJECT)
 
 #* Testing
 .PHONY: test
 test:
-	PYTHONPATH=$(PYTHONPATH) poetry run pytest -c pyproject.toml --cov-report=html --cov=graphtask tests/
+	PYTHONPATH=$(PYTHONPATH) poetry run pytest -c pyproject.toml --cov-report=html --cov=$(PROJECT) tests/
 	poetry run coverage-badge -o assets/images/coverage.svg -f
 
 #* Linting
 .PHONY: codestyle
 codestyle:
-	poetry run isort --diff --check-only --settings-path pyproject.toml ./
-	poetry run black --diff --check --config pyproject.toml ./
-	poetry run darglint --verbosity 2 graphtask tests
+	poetry run isort --diff --check-only --settings-path pyproject.toml $(PROJECT)
+	poetry run black --diff --check --config pyproject.toml $(PROJECT)
+	poetry run darglint --verbosity 2 $(PROJECT) tests
 
 .PHONY: pyright
 pyright:
@@ -64,7 +64,7 @@ pyright:
 safety:
 	poetry check
 	poetry run safety check --full-report
-	poetry run bandit -ll --recursive graphtask tests
+	poetry run bandit -ll --recursive $(PROJECT) tests
 
 .PHONY: lint
 lint: codestyle pyright safety
@@ -81,6 +81,17 @@ build:
 .PHONY: publish
 publish:
 	poetry publish --skip-existing
+
+#* Documentation
+.PHONY: docs
+docs:
+	poetry run sphinx-build -b html docs docs/_build/html
+
+doctest:
+	poetry run sphinx-build -b doctest docs docs/_build/doctest
+
+autodocs:
+	poetry run sphinx-autobuild docs docs/_build/html --watch $(PROJECT) --watch examples --ignore docs/_gallery --open-browser
 
 #* Cleaning
 .PHONY: pycache-remove

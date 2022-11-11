@@ -1,6 +1,3 @@
-"""
-Expose public functionality.
-"""
 from importlib import metadata as importlib_metadata
 
 from graphtask._task import Task, step

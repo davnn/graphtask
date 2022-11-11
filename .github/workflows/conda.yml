@@ -1,0 +1,24 @@
+#name: Conda
+#
+#on: [ workflow_dispatch ]
+#
+#jobs:
+#  setup:
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: Checkout feedstock
+#        uses: actions/checkout@v3
+#        repository: conda-forge/graphtask-feedstock
+#
+#      - name: Set up Python
+#        uses: actions/setup-python@v4
+#
+#      - name: Install Grayskull
+#        run: pip install grayskull==1.8.4
+#
+#      - name: Create meta.yml from PyPI
+#        run: python -m grayskull pypi graphtask
+#
+#      - name: Determine if update required
+#
+#      - name: Update feedstock
