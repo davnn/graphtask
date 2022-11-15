@@ -8,15 +8,13 @@ stability and accuracy of machine learning algorithms, see: `Bootstrap aggregati
 This example shows how you can create a `scikit-learn <https://scikit-learn.org/stable/index.html>`_ `bagging classifier <https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.BaggingClassifier.html>`_
 using graphtask. Let us first start with the necessary imports.
 """
-
-from copy import deepcopy
-
-import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.base import ClassifierMixin, BaseEstimator
+import numpy as np
+from sklearn.base import ClassifierMixin, BaseEstimator, clone
 from sklearn.datasets import make_blobs
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.utils.multiclass import check_classification_targets
+from sklearn.utils.validation import check_is_fitted
 
 from graphtask import Task, step
 from graphtask.visualize import to_pygraphviz
@@ -38,6 +36,9 @@ class BaggingClassifier(BaseEstimator, ClassifierMixin, Task):
         bootstrap=True
     ):
         super().__init__()
+        if base_estimator is None:
+            base_estimator = KNeighborsClassifier()
+
         self.base_estimator = base_estimator
         self.n_estimators = n_estimators
         self.max_samples = max_samples
@@ -56,10 +57,11 @@ class BaggingClassifier(BaseEstimator, ClassifierMixin, Task):
         return self.predict(X)
 
     def predict(self, X):
-        predicted_probabilitiy = self.predict_proba(X)
-        return self.classes_.take((np.argmax(predicted_probabilitiy, axis=1)), axis=0)
+        class_idx = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_.take(class_idx, axis=0)
 
     def predict_proba(self, X):
+        check_is_fitted(self)
         self.register(X_pred=X)
         bootstrap_probabilities = self.run("_predict_estimator")
         return np.mean(bootstrap_probabilities, axis=0)
@@ -75,14 +77,14 @@ class BaggingClassifier(BaseEstimator, ClassifierMixin, Task):
             samples = np.random.choice(range(n_samples), n_bootstrap_samples)
             yield X_fit[samples], y_fit[samples]
 
-    @step(split="_bootstrap")
+    @step(map="_bootstrap")
     def _fit_estimator(self, _bootstrap):
         X, y = _bootstrap
-        estimator = deepcopy(self.base_estimator)
+        estimator = clone(self.base_estimator)
         estimator.fit(X, y)
         return estimator
 
-    @step(split="_fit_estimator")
+    @step(map="_fit_estimator")
     def _predict_estimator(self, X_pred, _fit_estimator):
         return _fit_estimator.predict_proba(X_pred)
 
@@ -95,11 +97,7 @@ to_pygraphviz(model).draw("model.png")
 
 # %%
 # Let's run the classifier on some example data.
-
-X, y = make_blobs()
-
-# %%
-# Let's run the classifier on some example data.
+X, y = make_blobs(random_state=42)
 y_pred = model.fit_predict(X, y)
 
 # %%

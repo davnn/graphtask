@@ -9,6 +9,7 @@ from enum import Enum
 import networkx as nx
 
 from graphtask import Task
+from graphtask._task import MAP_ATTRIBUTE, TYPE_ATTRIBUTE, NodeType
 
 try:
     import pygraphviz as pg
@@ -23,14 +24,25 @@ __all__ = ["to_pygraphviz", "Orientation"]
 
 _GRAPH_LAYOUT = "dot"
 _GRAPH_ATTRIBUTES = lambda orientation: {"rankdir": orientation, "bgcolor": "white"}
-_NODE_ATTRIBUTES = {
-    "color": "#f0f0f0",
-    "style": "filled",
+_NODE_ATTRIBUTES = lambda node_type: {
+    "color": "black",
+    "fillcolor": "#f0f0f0",
     "fontcolor": "#111111",
-    "shape": "box",
     "fontsize": 10,
+    **get_node_style(node_type),
 }
-_EDGE_ATTRIBUTES = {"color": "black", "arrowsize": 2 / 3}
+_EDGE_ATTRIBUTES = lambda is_map: {"color": "black", "arrowsize": 2 / 3, "style": "dotted" if is_map else "solid"}
+
+
+def get_node_style(node_type: NodeType) -> dict[str, str]:
+    if node_type == NodeType.ATTRIBUTE:
+        return {"style": "rounded", "shape": "box"}
+    elif node_type == NodeType.FUNCTION:
+        return {"style": "filled", "shape": "box"}
+    elif node_type in [NodeType.MAP_KEYS, NodeType.MAP_VALUES, NodeType.MAP_ITEMS]:
+        return {"style": "filled", "shape": "box3d"}
+    else:
+        return {"style": "rounded,dashed", "shape": "box"}
 
 
 class Orientation(Enum):
@@ -60,12 +72,14 @@ def to_pygraphviz(graph: Union[Task, nx.DiGraph], orientation: Orientation = Ori
     # set node attributes
     for v in graph.nodes:
         node = agraph.get_node(v)
-        node.attr.update(_NODE_ATTRIBUTES)
+        node_type = graph.nodes[v].get(TYPE_ATTRIBUTE, None)
+        node.attr.update(_NODE_ATTRIBUTES(node_type))
 
     # set edge attributes
     for u, v in graph.edges:
+        is_map = graph.edges[u, v][MAP_ATTRIBUTE]
         edge = agraph.get_edge(u, v)
-        edge.attr.update(_EDGE_ATTRIBUTES)
+        edge.attr.update(_EDGE_ATTRIBUTES(is_map))
 
     agraph.layout(_GRAPH_LAYOUT)
     return agraph
