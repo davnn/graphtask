@@ -2,11 +2,13 @@
 Test the functionality of a `Task`.
 """
 from re import escape
+from typing import get_args
 
 import pytest
 from hypothesis import given
 
 from graphtask import Task
+from graphtask._task import MapTypeT
 from tests import *
 
 
@@ -23,21 +25,22 @@ def test_identity(data):
     assert data == task.run()
 
 
-@given(data=list_of_iterables)
-def test_identity_split(data):
+@given(data=dict_of_iterables)
+@pytest.mark.parametrize("map_type", get_args(MapTypeT))
+def test_identity_map_mappable(data, map_type):
     """Splitting an identity function does not change the input data"""
     task = Task()
     task.register(data=data)
-    task.step(identity, split="data")
+    task.step(identity, map="data", map_type=map_type)
     assert data == task.run()
 
 
-@given(data=dict_of_iterables)
-def test_identity_map(data):
-    """Mapping an identity function does not change the input data"""
+@given(data=list_of_iterables)
+def test_identity_map_iterable(data):
+    """Splitting an identity function does not change the input data"""
     task = Task()
     task.register(data=data)
-    task.step(fn=identity, map="data")
+    task.step(identity, map="data", map_type="values")
     assert data == task.run()
 
 
@@ -155,17 +158,13 @@ def test_assertions():
         task = Task()
         task.step(fn=fn_args_kwargs, args="x", kwargs="x")
 
-    with pytest.raises(AssertionError, match="Cannot combine 'split' and 'map'"):
-        task = Task()
-        task.step(fn=fn, split="data", map="data")
-
-    with pytest.raises(AssertionError, match="Step argument 'split' must refer to one of the parameters"):
-        task = Task()
-        task.step(fn=fn, split="data")
-
     with pytest.raises(AssertionError, match="Step argument 'map' must refer to one of the parameters"):
         task = Task()
         task.step(fn=fn, map="data")
+
+    with pytest.raises(AssertionError, match="The parameter 'map_type' must be one of"):
+        task = Task()
+        task.step(fn=fn, map="x", map_type="nonexistant")
 
     with pytest.raises(AssertionError, match="Cannot verify that predicate 'is_dag' holds"):
         task = Task()
@@ -178,15 +177,28 @@ def test_assertions():
         task.step(fn=fn)
         task.run()
 
-    with pytest.raises(AssertionError, match=f"Cannot verify that predicate 'is_iterable' holds"):
+    with pytest.raises(AssertionError, match=f"Parameter 'map' requires an iterable input argument"):
         task = Task()
         task.register(x=1)
-        task.step(fn=fn, split="x")
+        task.step(fn=fn, map="x")
+        task.run()
+
+    with pytest.raises(AssertionError, match=f"Cannot use 'map_type=keys' on non-mappable argument"):
+        task = Task()
+        task.register(data=[1, 2, 3])
+        task.step(identity, map="data", map_type="keys")
+        task.run()
+
+    with pytest.raises(AssertionError, match=f"Cannot use 'map_type=items' on non-mappable argument"):
+        task = Task()
+        task.register(data=[1, 2, 3])
+        task.step(identity, map="data", map_type="items")
         task.run()
 
     # run
     with pytest.raises(AssertionError, match="The 'node' must be in Task"):
         task = Task()
+        task.register(data=[1, 2, 3])
         task.run(node="missing")
 
     with pytest.raises(AssertionError, match="Cannot verify that predicate 'is_dag' holds"):

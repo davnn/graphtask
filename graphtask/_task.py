@@ -1,7 +1,7 @@
 """
 Definition of a `Task` and `step`.
 """
-from typing import Any, Optional, TypeVar, Union, cast, overload
+from typing import Any, Literal, Optional, Protocol, TypeVar, Union, cast, get_args, overload
 
 import inspect
 import logging
@@ -22,28 +22,42 @@ __all__ = ["Task", "step"]
 
 DecorableT = TypeVar("DecorableT", bound=Callable[..., Any])
 ArgsT = dict[str, Any]
-SplitArgsT = list[ArgsT]
-MapArgsT = dict[Hashable, ArgsT]
+MapArgsT = list[tuple[str, Hashable, Any]]
+MapTypeT = Literal["keys", "values", "items"]
+
+
+class MapFnT(Protocol):
+    """A map function converts an argument name (key), map_key and map_value to a (key, value) result."""
+
+    def __call__(
+        self, key: str, map_key: Hashable, map_value: Any, **kw: Any
+    ) -> tuple[Hashable, Any]:  # pragma: no cover
+        ...
+
 
 FUNC_ATTRIBUTE = "__func__"
 DATA_ATTRIBUTE = "__data__"
 STEP_ATTRIBUTE = "__step__"
 TYPE_ATTRIBUTE = "__type__"
+MAP_ATTRIBUTE = "__map__"
 
 
 class NodeType(Enum):
-    """The kind of node stored in `TYPE_ATTRIBUTE` of a node."""
+    """The internal type of node, which is stored in `TYPE_ATTRIBUTE` of a node."""
 
-    ATTRIBUTE = 1
-    FUNCTION = 2
+    ATTRIBUTE = "attribute"
+    FUNCTION = "function"
+    MAP_KEYS = "map_keys"
+    MAP_VALUES = "map_values"
+    MAP_ITEMS = "map_items"
 
 
 @overload
 def step(
     fn: DecorableT,
     *,
-    split: Optional[str] = None,
     map: Optional[str] = None,
+    map_type: MapTypeT = "values",
     rename: Optional[str] = None,
     args: Optional[Union[str, Iterable[str]]] = None,
     kwargs: Optional[Union[str, Iterable[str]]] = None,
@@ -56,8 +70,8 @@ def step(
 @overload
 def step(
     *,
-    split: Optional[str] = None,
     map: Optional[str] = None,
+    map_type: MapTypeT = "values",
     rename: Optional[str] = None,
     args: Optional[Union[str, Iterable[str]]] = None,
     kwargs: Optional[Union[str, Iterable[str]]] = None,
@@ -70,8 +84,8 @@ def step(
 def step(
     fn: Optional[DecorableT] = None,
     *,
-    split: Optional[str] = None,
     map: Optional[str] = None,
+    map_type: MapTypeT = "values",
     rename: Optional[str] = None,
     args: Optional[Union[str, Iterable[str]]] = None,
     kwargs: Optional[Union[str, Iterable[str]]] = None,
@@ -83,15 +97,16 @@ def step(
     ----------
     fn: optional callable
         The method to be decorated, which gets added to the underlying ``Task``.
-    split: optional str
-        Iterable dependency to split and invoke ``fn`` on each iterated value. An iterable dependency must return an
-        ``Iterable``, for example a list of ``[value1, value2]``. If ``split`` is specified for the dependency, the
-        function is invoked as ``[fn(value1), fn(value2)]`` always returning a list.
     map: optional str
-        Mappable dependency to invoke ``fn`` on each iterated value of the map. A mappable dependency must return a
-        ``Mapping``, for example a dictionary of ``{key1: value1, key2: value2}``. If ``map`` is specified for the
-        dependency, the function would only operate on the values and the return value of the node would look like
-        ``{key1: fn(value1), key2: fn(value2)}``.
+        Name of the iterable argument to invoke ``fn`` on each key, value or item of the argument value. A non-mappable
+        iterable argument value, for example a list of values, is treated as a mapping of indices to values, i.e. the
+        list ``["a", "b", "c"]`` would be treated as ``{0: "a", 1: "b", 2: "c"}``. If ``map`` is specified, the node
+        automatically returns a mapping (dictionary) of keys to values.
+    map_type: MapTypeT
+        The type of mapping to perform using ``map``. Can be ``"keys"`` resulting in
+        ``{fn(key1): value1, fn(key2): value2, ...}``, ``"values"`` resulting in
+        ``{key1: fn(value1), key2: fn(value2), ...}`` or ``"items"`` resulting in
+        ``{fn((key1, value1), fn(key2, value2), ...}``.
     rename: optional str
         Rename the node in the graph created with ``fn``, the default node name is ``fn.__name__``. For lambda
         functions, the ``fn.__name__`` is always ``<lambda>``, for example. Because node names have to be unique
@@ -101,7 +116,7 @@ def step(
         for the given ``fn``. If ``args`` is ``["a", "b", "c"]``, it would inject the dependencies ``"a"``, ``"b"``
         and ``"c"`` as positional arguments.
     kwargs: optional iterable of str
-        Iterable of identifiers for variable keyword arguments. This argument is required if `*args` is specified
+        Iterable of identifiers for variable keyword arguments. This argument is required if ``**kwargs`` is specified
         for the given ``fn``. If ``kwargs`` is ``["a", "b", "c"]``, it would inject the dependencies ``"a"``, ``"b"``
         and ``"c"`` as keyword arguments.
     alias: optional mapping of str to str
@@ -116,7 +131,9 @@ def step(
     """
 
     def decorator(fn: DecorableT) -> DecorableT:
-        setattr(fn, STEP_ATTRIBUTE, dict(split=split, map=map, rename=rename, args=args, kwargs=kwargs, alias=alias))
+        setattr(
+            fn, STEP_ATTRIBUTE, dict(map=map, map_type=map_type, rename=rename, args=args, kwargs=kwargs, alias=alias)
+        )
         return fn
 
     if callable(fn):
@@ -169,8 +186,8 @@ class Task(metaclass=TaskMeta):
         self,
         fn: DecorableT,
         *,
-        split: Optional[str] = None,
         map: Optional[str] = None,
+        map_type: MapTypeT = "values",
         rename: Optional[str] = None,
         args: Optional[Union[str, Iterable[str]]] = None,
         kwargs: Optional[Union[str, Iterable[str]]] = None,
@@ -183,8 +200,8 @@ class Task(metaclass=TaskMeta):
     def step(
         self,
         *,
-        split: Optional[str] = None,
         map: Optional[str] = None,
+        map_type: MapTypeT = "values",
         rename: Optional[str] = None,
         args: Optional[Union[str, Iterable[str]]] = None,
         kwargs: Optional[Union[str, Iterable[str]]] = None,
@@ -197,8 +214,8 @@ class Task(metaclass=TaskMeta):
         self,
         fn: Optional[DecorableT] = None,
         *,
-        split: Optional[str] = None,
         map: Optional[str] = None,
+        map_type: MapTypeT = "values",
         rename: Optional[str] = None,
         args: Optional[Union[str, Iterable[str]]] = None,
         kwargs: Optional[Union[str, Iterable[str]]] = None,
@@ -213,7 +230,7 @@ class Task(metaclass=TaskMeta):
             # we only care about the parameter names from now on (as a set of string)
             params = set(original_posargs).union(set(original_kwargs))
             alias_step_parameters(params, alias)
-            verify_step_parameters(params, split=split, map=map)
+            verify_map_parameter(params, map=map)
             logger.debug(f"Extracted function parameters: '{params}'.")
 
             # rename the node if `rename` is given
@@ -239,12 +256,13 @@ class Task(metaclass=TaskMeta):
 
             # add the processed function to the graph
             logger.debug(f"Adding node '{fn_name}' to graph")
-            self._graph.add_node(fn_name, **{FUNC_ATTRIBUTE: fn_processed, TYPE_ATTRIBUTE: NodeType.FUNCTION})
+            node_type = get_node_type(map, map_type)
+            self._graph.add_node(fn_name, **{FUNC_ATTRIBUTE: fn_processed, TYPE_ATTRIBUTE: node_type})
 
             # make sure the fn's parameters are nodes in the graph
             for param in params:
                 logger.debug(f"Adding dependency '{param}' to graph")
-                self._graph.add_edge(param, fn_name, split=split == param, map=map == param)
+                self._graph.add_edge(param, fn_name, **{MAP_ATTRIBUTE: map == param})
 
             # make sure that the resulting graph is a DAG
             verify(is_dag, self._graph)
@@ -319,20 +337,32 @@ class Task(metaclass=TaskMeta):
             The materialized value of the node.
         """
         current_node = self._graph.nodes[node]
-        logger.debug(f"Current node:        {repr(node)}")
-        kwargs, kwarg_split, kwarg_map = predecessor_edges(self._graph, node)
-        logger.debug(f"Determined kwargs: {kwargs}")
-        logger.debug(f"Determined split kwarg: {kwarg_split}")
-        logger.debug(f"Determined map kwarg: {kwarg_map}\n")
+        logger.debug(f"Current node:         {repr(node)}")
+
+        kwargs, map_arg, mappable = prepare_data_from_predecessors(self._graph, node)
+        logger.debug(f"Determined kwargs:    {kwargs}")
+        logger.debug(f"Determined map kwarg: {map_arg}\n")
 
         assert FUNC_ATTRIBUTE in current_node, f"Node '{node}' not defined, but set as a dependency."
         fn = current_node[FUNC_ATTRIBUTE]
 
-        if kwarg_split is not None:
-            result = self._parallel()(delayed(fn)(**kwargs, **arg) for arg in kwarg_split)
-        elif kwarg_map is not None:
-            map_fn: Callable[..., tuple[Hashable, Any]] = lambda key, **kw: (key, fn(**kw))
-            result = dict(self._parallel()(delayed(map_fn)(key, **kwargs, **kw) for key, kw in kwarg_map.items()))
+        assert TYPE_ATTRIBUTE in current_node, f"Node '{node}' does not specify a '{TYPE_ATTRIBUTE}' attribute."
+        node_type = current_node[TYPE_ATTRIBUTE]
+
+        map_fn: Optional[MapFnT] = None
+        if node_type == NodeType.MAP_VALUES:
+            map_fn = lambda key, map_key, map_value, **kw: (map_key, fn(**{key: map_value}, **kw))
+        elif node_type == NodeType.MAP_KEYS:
+            assert mappable, "Cannot use 'map_type=keys' on non-mappable argument."
+            map_fn = lambda key, map_key, map_value, **kw: (fn(**{key: map_key}, **kw), map_value)
+        elif node_type == NodeType.MAP_ITEMS:
+            assert mappable, "Cannot use 'map_type=items' on non-mappable argument."
+            map_fn = lambda key, map_key, map_value, **kw: fn(**{key: (map_key, map_value)}, **kw)
+
+        if map_fn is not None:
+            assert map_arg is not None, f"No mappable argument found for node specified as type '{node_type}'."
+            result = self._parallel()(delayed(map_fn)(key, mk, mv, **kwargs) for key, mk, mv in map_arg)
+            result = dict(result) if mappable else [value for _, value in result]
         else:
             result = fn(**kwargs)
 
@@ -366,11 +396,27 @@ class Task(metaclass=TaskMeta):
         return header + f"\n{text.strip()}"
 
 
-def predecessor_edges(graph: nx.DiGraph, node: Hashable) -> tuple[ArgsT, Optional[SplitArgsT], Optional[MapArgsT]]:
-    """Prepare the input data for `node` based on normal, `split` and `map` edges.
+def get_node_type(map: Optional[str], map_type: MapTypeT) -> NodeType:
+    """Based on ``map`` and ``map_type`` determine the type of the node."""
+    if map is None:
+        return NodeType.FUNCTION
+    elif map_type == "keys":
+        return NodeType.MAP_KEYS
+    elif map_type == "values":
+        return NodeType.MAP_VALUES
+    elif map_type == "items":
+        return NodeType.MAP_ITEMS
+    else:
+        msg = f"The parameter 'map_type' must be one of '{get_args(MapTypeT)}' but found '{map_type}'"
+        raise AssertionError(msg)
 
-    The split edge (there can only be one) is transformed from {"key": [1, 2, ...]} to [{"key": 1}, {"key": 2}, ...].
-    The map edge: {"key": {"map_key_1": 1, "map_key_2": 2}} -> {"map_key_1": {"key": 1}, "map_key_2": {"key": 2}, ...}.
+
+def prepare_data_from_predecessors(graph: nx.DiGraph, node: Hashable) -> tuple[ArgsT, Optional[MapArgsT], bool]:
+    """Prepare the input data for `node` based on normal edges and an optional `map` edge.
+
+    The map edge (there can only be one) is transformed from ``{"key": {"map_key1": 1, "map_key2": 2, ...}}`` to
+    ``[(key, map_key1, 1), (key, map_key_2, 2), ...]``. If the map edge is not a mappable, but an iterable input,
+    it is transformed from ``{"key": [1, 2, ...]}`` to a mapping of indices ``[(key, 0, 1), (key, 1, 2), ...]``.
 
     Parameters
     ----------
@@ -383,17 +429,15 @@ def predecessor_edges(graph: nx.DiGraph, node: Hashable) -> tuple[ArgsT, Optiona
     -------
     dict[str, Any]
         Keyword arguments directly from edges that have not been processed.
-    list[dict[str, Any]]
-        Optional `split` argument.
-    dict[Hashable, dict[str, Any]]
-        Optional `map` arguments.
+    list[tuple[Hashable, Hashable, Any]]
+        Optional processed arguments for ``map`` edge.
     """
     direct_predecessors = list(graph.predecessors(node))
     logger.debug(f"Direct predecessors: {direct_predecessors}")
 
+    mappable = True
     kwargs: ArgsT = {}
-    kwarg_split = None
-    kwarg_map = None
+    map_args: Optional[MapArgsT] = None
 
     edges: dict[Hashable, dict[Hashable, Any]] = {dep: graph.edges[dep, node] for dep in direct_predecessors}
     logger.debug(f"Predecessor edges: {edges}")
@@ -401,27 +445,25 @@ def predecessor_edges(graph: nx.DiGraph, node: Hashable) -> tuple[ArgsT, Optiona
     for key, edge in edges.items():
         key = cast(str, key)  # we only use str keys
         data = graph.nodes[key][DATA_ATTRIBUTE]
-        if edge["split"]:
-            kwarg_split = split_arg(key, data)
-        elif edge["map"]:
-            kwarg_map = map_arg(key, data)
+        if edge[MAP_ATTRIBUTE]:
+            mappable = is_mapping(data)
+            map_args = preprocess_map_arg(key, data)
         else:
             kwargs[key] = data
 
-    return kwargs, kwarg_split, kwarg_map
+    return kwargs, map_args, mappable
 
 
-def map_arg(key: str, data: Mapping[Hashable, Any]) -> MapArgsT:
+def preprocess_map_arg(key: str, data: Union[dict[Hashable, Any], Iterable[Any]]) -> MapArgsT:
     """Ensure that the arg is mappable and convert to mapping of map keys to argument dictionaries."""
-    verify(is_mapping, data)
-    result = {map_key: {key: map_value} for map_key, map_value in data.items()}
-    return result
-
-
-def split_arg(key: str, data: Iterable[Any]) -> SplitArgsT:
-    """Ensure that the arg is splittable (iterable) and split into a list of args containing the values in the list."""
-    verify(is_iterable, data)
-    result = [{key: value} for value in data]
+    if is_mapping(data):
+        data = cast(Mapping[Hashable, Any], data)
+        result = [(key, map_key, map_value) for map_key, map_value in data.items()]
+    elif is_iterable(data):
+        data = cast(Iterable[Any], data)
+        result = [(key, cast(Hashable, map_key), map_value) for map_key, map_value in enumerate(data)]
+    else:
+        raise AssertionError(f"Parameter 'map' requires an iterable input argument, but found {data}")
     return result
 
 
@@ -584,14 +626,8 @@ def invert_alias_step_parameters(params: dict[str, Any], alias: Optional[Mapping
             params[inverse_alias[key]] = params.pop(key)
 
 
-def verify_step_parameters(params: set[str], split: Optional[str], map: Optional[str]) -> None:
+def verify_map_parameter(params: set[str], map: Optional[str]) -> None:
     """Ensure that given `split` and `map` are in the (final) parameter set."""
-    if split is not None and map is not None:
-        raise AssertionError("Cannot combine 'split' and 'map' in a single step.")
-
-    if split is not None:
-        assert split in params, f"Step argument 'split' must refer to one of the parameters, but found '{split}'."
-
     if map is not None:
         assert map in params, f"Step argument 'map' must refer to one of the parameters, but found '{map}'."
 
