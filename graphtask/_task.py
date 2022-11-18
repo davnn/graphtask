@@ -229,8 +229,8 @@ class Task(metaclass=TaskMeta):
             # combine all parameters to a single `set` of parameters (the dependencies in the graph)
             # we only care about the parameter names from now on (as a set of string)
             params = set(original_posargs).union(set(original_kwargs))
-            alias_step_parameters(params, alias)
-            verify_map_parameter(params, map=map)
+            alias_params(params, alias)
+            verify_map_param(params, map=map)
             logger.debug(f"Extracted function parameters: '{params}'.")
 
             # rename the node if `rename` is given
@@ -250,7 +250,7 @@ class Task(metaclass=TaskMeta):
                 Any
                     Return value of the original (unprocessed) function.
                 """
-                invert_alias_step_parameters(passed, alias)
+                invert_alias_params(passed, alias)
                 positional = process_positional_args(passed, original_posargs)
                 return fn(*positional, **passed)
 
@@ -608,7 +608,7 @@ def first_keyword_idx(param_kinds: list[inspect._ParameterKind]) -> int:  # type
     return min(var_pos_idx, kw_only_idx, var_kw_idx)
 
 
-def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) -> None:
+def alias_params(params: set[str], alias: Optional[Mapping[str, str]]) -> None:
     """Rename function parameters to use a given alias."""
     if alias is not None:
         params_to_replace = (key for key in alias.keys() if key in params)
@@ -617,7 +617,7 @@ def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) 
             params.add(alias[param])
 
 
-def invert_alias_step_parameters(params: dict[str, Any], alias: Optional[Mapping[str, str]]) -> None:
+def invert_alias_params(params: dict[str, Any], alias: Optional[Mapping[str, str]]) -> None:
     """Undo renaming of function parameters, i.e. for the passed `params` change the aliased keys to original keys."""
     if alias is not None:
         inverse_alias = {v: k for k, v in alias.items()}
@@ -626,7 +626,7 @@ def invert_alias_step_parameters(params: dict[str, Any], alias: Optional[Mapping
             params[inverse_alias[key]] = params.pop(key)
 
 
-def verify_map_parameter(params: set[str], map: Optional[str]) -> None:
+def verify_map_param(params: set[str], map: Optional[str]) -> None:
     """Ensure that given `split` and `map` are in the (final) parameter set."""
     if map is not None:
         assert map in params, f"Step argument 'map' must refer to one of the parameters, but found '{map}'."
