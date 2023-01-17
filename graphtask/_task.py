@@ -1,55 +1,24 @@
 """
 Definition of a `Task` and `step`.
 """
-from typing import Any, Literal, Optional, Protocol, TypeVar, Union, cast, get_args, overload
-
 import inspect
 import logging
 import warnings
 from collections.abc import Callable, Hashable, Iterable, Mapping
-from enum import Enum
 from sys import maxsize
+from typing import Any, Optional, Union, overload
 
 import networkx as nx
-from joblib import Parallel, delayed
 
-from graphtask._check import is_dag, is_iterable, is_mapping, verify
+from graphtask._check import is_dag, verify
+from graphtask._globals import STEP_ATTRIBUTE, MapTypeT, DecorableT
+from graphtask._step import Step, StepParams, StepArgs
+from joblib import Parallel, delayed
 from vendor.stackeddag import edgesToText, mkEdges, mkLabels
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["Task", "step"]
-
-DecorableT = TypeVar("DecorableT", bound=Callable[..., Any])
-ArgsT = dict[str, Any]
-MapArgsT = list[tuple[str, Hashable, Any]]
-MapTypeT = Literal["keys", "values", "items"]
-
-
-class MapFnT(Protocol):
-    """A map function converts an argument name (key), map_key and map_value to a (key, value) result."""
-
-    def __call__(
-        self, key: str, map_key: Hashable, map_value: Any, **kw: Any
-    ) -> tuple[Hashable, Any]:  # pragma: no cover
-        ...
-
-
-FUNC_ATTRIBUTE = "__func__"
-DATA_ATTRIBUTE = "__data__"
-STEP_ATTRIBUTE = "__step__"
-TYPE_ATTRIBUTE = "__type__"
-MAP_ATTRIBUTE = "__map__"
-
-
-class NodeType(Enum):
-    """The internal type of node, which is stored in `TYPE_ATTRIBUTE` of a node."""
-
-    ATTRIBUTE = "attribute"
-    FUNCTION = "function"
-    MAP_KEYS = "map_keys"
-    MAP_VALUES = "map_values"
-    MAP_ITEMS = "map_items"
 
 
 @overload
@@ -179,7 +148,7 @@ class Task(metaclass=TaskMeta):
 
         # private attributes
         self._graph = nx.DiGraph()
-        self._parallel = lambda: Parallel(n_jobs=n_jobs, backend="threading")
+        self._parallel = lambda: Parallel(n_jobs=n_jobs, prefer="threads")
 
     @overload
     def step(
@@ -225,16 +194,16 @@ class Task(metaclass=TaskMeta):
 
         def decorator(fn: DecorableT) -> DecorableT:
             params = get_function_params(fn)
-            original_posargs, original_kwargs = split_step_params(params, args, kwargs)
+            step_args = determine_step_arguments(params, args, kwargs)
             # combine all parameters to a single `set` of parameters (the dependencies in the graph)
             # we only care about the parameter names from now on (as a set of string)
-            params = set(original_posargs).union(set(original_kwargs))
+            params = set(step_args.positional).union(set(step_args.keyword))
             alias_step_parameters(params, alias)
             verify_map_parameter(params, map=map)
             logger.debug(f"Extracted function parameters: '{params}'.")
 
             # rename the node if `rename` is given
-            fn_name = fn.__name__ if rename is None else rename
+            step_name = fn.__name__ if rename is None else rename
 
             def fn_processed(**passed: Any) -> Any:
                 """A closure function, that re-arranges the passed keyword arguments into positional-only, variable
@@ -251,22 +220,40 @@ class Task(metaclass=TaskMeta):
                     Return value of the original (unprocessed) function.
                 """
                 invert_alias_step_parameters(passed, alias)
-                positional = process_positional_args(passed, original_posargs)
+                positional = process_positional_args(passed, step_args.positional)
                 return fn(*positional, **passed)
 
             # add the processed function to the graph
-            logger.debug(f"Adding node '{fn_name}' to graph")
-            node_type = get_node_type(map, map_type)
-            self._graph.add_node(fn_name, **{FUNC_ATTRIBUTE: fn_processed, TYPE_ATTRIBUTE: node_type})
+            logger.debug(f"Adding node '{step_name}' to graph")
 
             # make sure the fn's parameters are nodes in the graph
             for param in params:
                 logger.debug(f"Adding dependency '{param}' to graph")
-                self._graph.add_edge(param, fn_name, **{MAP_ATTRIBUTE: map == param})
+                self._graph.add_edge(param, step_name)
+
+            step = Step(
+                name=step_name,
+                fn=fn_processed,
+                args=step_args,
+                task=self,
+                signature=inspect.signature(fn),
+                dependencies=nx.subgraph_view(self._graph, filter_node=lambda node: node in params),
+                # dependencies=nx.edge_subgraph(self._graph, [(param, step_name) for param in params]),
+                params=StepParams(
+                    map_arg=map,
+                    map_type=map_type,
+                    rename=rename,
+                    args=args,
+                    kwargs=kwargs,
+                    alias=alias
+                )
+            )
+
+            self._graph.add_node(step_name, **{STEP_ATTRIBUTE: step})
 
             # make sure that the resulting graph is a DAG
             verify(is_dag, self._graph)
-            return fn
+            return step
 
         if callable(fn):
             # use `step` directly as a decorator (return the decorated fn)
@@ -287,8 +274,9 @@ class Task(metaclass=TaskMeta):
         """
         for key, value in kwargs.items():
             logger.debug(f"Registering node {key}")
-            lazy_value: Callable[[Any], Any] = lambda v=value: v
-            self._graph.add_node(key, **{FUNC_ATTRIBUTE: lazy_value, TYPE_ATTRIBUTE: NodeType.ATTRIBUTE})
+            fn: Callable[[Any], Any] = (lambda v=value: lambda: v)()
+            self._graph.add_node(key,
+                                 **{STEP_ATTRIBUTE: Step(name=key, task=self, fn=fn, signature=inspect.signature(fn))})
 
     def run(self, node: Optional[str] = None) -> Any:
         """Run the full task if no `node` is given, otherwise run up until `node`.
@@ -338,39 +326,9 @@ class Task(metaclass=TaskMeta):
         """
         current_node = self._graph.nodes[node]
         logger.debug(f"Current node:         {repr(node)}")
-
-        kwargs, map_arg, mappable = prepare_data_from_predecessors(self._graph, node)
-        logger.debug(f"Determined kwargs:    {kwargs}")
-        logger.debug(f"Determined map kwarg: {map_arg}\n")
-
-        assert FUNC_ATTRIBUTE in current_node, f"Node '{node}' not defined, but set as a dependency."
-        fn = current_node[FUNC_ATTRIBUTE]
-
-        assert TYPE_ATTRIBUTE in current_node, f"Node '{node}' does not specify a '{TYPE_ATTRIBUTE}' attribute."
-        node_type = current_node[TYPE_ATTRIBUTE]
-
-        map_fn: Optional[MapFnT] = None
-        if node_type == NodeType.MAP_VALUES:
-            map_fn = lambda key, map_key, map_value, **kw: (map_key, fn(**{key: map_value}, **kw))
-        elif node_type == NodeType.MAP_KEYS:
-            assert mappable, "Cannot use 'map_type=keys' on non-mappable argument."
-            map_fn = lambda key, map_key, map_value, **kw: (fn(**{key: map_key}, **kw), map_value)
-        elif node_type == NodeType.MAP_ITEMS:
-            assert mappable, "Cannot use 'map_type=items' on non-mappable argument."
-            map_fn = lambda key, map_key, map_value, **kw: fn(**{key: (map_key, map_value)}, **kw)
-
-        if map_fn is not None:
-            assert map_arg is not None, f"No mappable argument found for node specified as type '{node_type}'."
-            result = self._parallel()(delayed(map_fn)(key, mk, mv, **kwargs) for key, mk, mv in map_arg)
-            result = dict(result) if mappable else [value for _, value in result]
-        else:
-            result = fn(**kwargs)
-
-        # add the materialized result to the node
-        current_node[DATA_ATTRIBUTE] = result
-
-        # return the materialized result
-        return result
+        assert STEP_ATTRIBUTE in current_node, f"Node '{node}' not defined, but set as a dependency."
+        step = current_node[STEP_ATTRIBUTE]
+        return step.materialize()
 
     def __str__(self) -> str:
         return f"Task(n_jobs={self.n_jobs})"
@@ -396,77 +354,6 @@ class Task(metaclass=TaskMeta):
         return header + f"\n{text.strip()}"
 
 
-def get_node_type(map: Optional[str], map_type: MapTypeT) -> NodeType:
-    """Based on ``map`` and ``map_type`` determine the type of the node."""
-    if map is None:
-        return NodeType.FUNCTION
-    elif map_type == "keys":
-        return NodeType.MAP_KEYS
-    elif map_type == "values":
-        return NodeType.MAP_VALUES
-    elif map_type == "items":
-        return NodeType.MAP_ITEMS
-    else:
-        msg = f"The parameter 'map_type' must be one of '{get_args(MapTypeT)}' but found '{map_type}'"
-        raise AssertionError(msg)
-
-
-def prepare_data_from_predecessors(graph: nx.DiGraph, node: Hashable) -> tuple[ArgsT, Optional[MapArgsT], bool]:
-    """Prepare the input data for `node` based on normal edges and an optional `map` edge.
-
-    The map edge (there can only be one) is transformed from ``{"key": {"map_key1": 1, "map_key2": 2, ...}}`` to
-    ``[(key, map_key1, 1), (key, map_key_2, 2), ...]``. If the map edge is not a mappable, but an iterable input,
-    it is transformed from ``{"key": [1, 2, ...]}`` to a mapping of indices ``[(key, 0, 1), (key, 1, 2), ...]``.
-
-    Parameters
-    ----------
-    graph: DiGraph
-        A directed acyclic graph (DAG).
-    node: Hashable
-        Identifier of the node to predecessors.
-
-    Returns
-    -------
-    dict[str, Any]
-        Keyword arguments directly from edges that have not been processed.
-    list[tuple[Hashable, Hashable, Any]]
-        Optional processed arguments for ``map`` edge.
-    """
-    direct_predecessors = list(graph.predecessors(node))
-    logger.debug(f"Direct predecessors: {direct_predecessors}")
-
-    mappable = True
-    kwargs: ArgsT = {}
-    map_args: Optional[MapArgsT] = None
-
-    edges: dict[Hashable, dict[Hashable, Any]] = {dep: graph.edges[dep, node] for dep in direct_predecessors}
-    logger.debug(f"Predecessor edges: {edges}")
-
-    for key, edge in edges.items():
-        key = cast(str, key)  # we only use str keys
-        data = graph.nodes[key][DATA_ATTRIBUTE]
-        if edge[MAP_ATTRIBUTE]:
-            mappable = is_mapping(data)
-            map_args = preprocess_map_arg(key, data)
-        else:
-            kwargs[key] = data
-
-    return kwargs, map_args, mappable
-
-
-def preprocess_map_arg(key: str, data: Union[dict[Hashable, Any], Iterable[Any]]) -> MapArgsT:
-    """Ensure that the arg is mappable and convert to mapping of map keys to argument dictionaries."""
-    if is_mapping(data):
-        data = cast(Mapping[Hashable, Any], data)
-        result = [(key, map_key, map_value) for map_key, map_value in data.items()]
-    elif is_iterable(data):
-        data = cast(Iterable[Any], data)
-        result = [(key, cast(Hashable, map_key), map_value) for map_key, map_value in enumerate(data)]
-    else:
-        raise AssertionError(f"Parameter 'map' requires an iterable input argument, but found {data}")
-    return result
-
-
 def process_positional_args(passed: dict[str, Any], pos_args: list[str]) -> list[str]:
     """Process `passed` args to extract positional arguments and remove them from `passed` (the remaining kw-args).
 
@@ -490,11 +377,11 @@ def process_positional_args(passed: dict[str, Any], pos_args: list[str]) -> list
     return pos_values
 
 
-def split_step_params(
+def determine_step_arguments(
     params: list[inspect.Parameter],
     args: Optional[Union[str, Iterable[str]]],
     kwargs: Optional[Union[str, Iterable[str]]],
-) -> tuple[list[str], list[str]]:
+) -> StepArgs:
     """Split positional and keyword arguments from `params`.
 
     Note that an argument has to be supplied using a keyword if it follows a var-positional argument (following *args),
@@ -511,13 +398,12 @@ def split_step_params(
 
     Returns
     -------
-    list[str]
-        List of positional arguments.
-    list[str]
-        List of keyword arguments.
+    StepArgs:
+        Classification of positional, keyword and positional-only arguments.
     """
     param_names: list[Union[str, list[str]]] = []
     param_kinds: list[inspect._ParameterKind] = []  # type:ignore[reportPrivateUsage]
+    pos_only_names = []
     has_var_arg = False
     has_var_kwarg = False
     for param in params:
@@ -536,25 +422,27 @@ def split_step_params(
             kwargs = [kwargs] if isinstance(kwargs, str) else list(kwargs)
             param_names.append(kwargs)
             has_var_kwarg = True
+        elif kind == inspect.Parameter.POSITIONAL_ONLY:
+            param_names.append(name)
+            pos_only_names.append(name)
         else:
             param_names.append(name)
 
-    # validate the input to `args` and `kwargs`
-    if has_var_arg and args is not None:
+    if has_var_arg:
         duplicates = [arg for arg in args if arg in param_names]
         assert not any(duplicates), (
             f"The names provided to 'args' cannot be duplicates of the "
             f"function parameters, but found duplicates: '{duplicates}'."
         )
 
-    if has_var_kwarg and kwargs is not None:
+    if has_var_kwarg:
         duplicates = [arg for arg in kwargs if arg in param_names]
         assert not any(duplicates), (
             f"The names provided to 'kwargs' cannot be duplicates of the "
             f"function parameters, but found duplicates: '{duplicates}'."
         )
 
-    if args is not None and kwargs is not None:
+    if has_var_arg and has_var_kwarg:
         duplicates = [arg for arg in args if arg in kwargs]
         assert not any(
             duplicates
@@ -570,7 +458,8 @@ def split_step_params(
     kw_idx = first_keyword_idx(param_kinds)
     pos_names = flatten_names(param_names[:kw_idx])
     kw_names = flatten_names(param_names[kw_idx:])
-    return pos_names, kw_names
+    pos_only = pos_only_names + args
+    return StepArgs(positional=pos_names, keyword=kw_names, positional_only=pos_only)
 
 
 def flatten_names(ls: list[Union[str, list[str]]]) -> list[str]:
@@ -610,26 +499,26 @@ def first_keyword_idx(param_kinds: list[inspect._ParameterKind]) -> int:  # type
 
 def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) -> None:
     """Rename function parameters to use a given alias."""
-    if alias is not None:
-        params_to_replace = (key for key in alias.keys() if key in params)
-        for param in params_to_replace:
-            params.remove(param)
-            params.add(alias[param])
+    for original_name, replacement_name in alias.items() if alias is not None else {}:
+        if original_name in params:
+            params.remove(original_name)
+            params.add(alias[original_name])
+        else:
+            warnings.warn(f"Found alias '{original_name}', but '{original_name}' is not in the arguments.")
 
 
 def invert_alias_step_parameters(params: dict[str, Any], alias: Optional[Mapping[str, str]]) -> None:
     """Undo renaming of function parameters, i.e. for the passed `params` change the aliased keys to original keys."""
-    if alias is not None:
-        inverse_alias = {v: k for k, v in alias.items()}
-        keys_to_rename = (key for key in inverse_alias.keys() if key in params)
-        for key in keys_to_rename:
-            params[inverse_alias[key]] = params.pop(key)
+    inverse_alias = {v: k for k, v in alias.items()} if alias is not None else {}
+    keys_to_rename = (key for key in inverse_alias.keys() if key in params)
+    for key in keys_to_rename:
+        params[inverse_alias[key]] = params.pop(key)
 
 
 def verify_map_parameter(params: set[str], map: Optional[str]) -> None:
     """Ensure that given `split` and `map` are in the (final) parameter set."""
     if map is not None:
-        assert map in params, f"Step argument 'map' must refer to one of the parameters, but found '{map}'."
+        assert map in params, f"Step parameter 'map' must refer to one of the function arguments, but found '{map}'."
 
 
 def get_function_params(fn: Callable[..., Any]) -> list[inspect.Parameter]:

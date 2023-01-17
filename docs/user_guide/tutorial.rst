@@ -8,7 +8,7 @@ different computing tasks.
 Traditionally, you would have to define your processing tasks *explicitly* as a DAG by specifying how different steps
 of your tasks relate to each other. Graphtask, however, can infer the structure of the DAG, without you having to
 define it. This results in *pure*, *testable* and *declarative* functions and the complex relationships between the
-functions is automatically inferred for you.
+functions is automatically inferred for you based on the names of the functions and their arguments.
 
 Creating your first Task
 ------------------------

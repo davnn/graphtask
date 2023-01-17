@@ -31,7 +31,7 @@ def test_identity_map_mappable(data, map_type):
     """Splitting an identity function does not change the input data"""
     task = Task()
     task.register(data=data)
-    task.step(identity, map="data", map_type=map_type)
+    task.step(identity, map_arg="data", map_type=map_type)
     assert data == task.run()
 
 
@@ -40,7 +40,7 @@ def test_identity_map_iterable(data):
     """Splitting an identity function does not change the input data"""
     task = Task()
     task.register(data=data)
-    task.step(identity, map="data", map_type="values")
+    task.step(identity, map_arg="data", map_type="values")
     assert data == task.run()
 
 
@@ -160,11 +160,11 @@ def test_assertions():
 
     with pytest.raises(AssertionError, match="Step argument 'map' must refer to one of the parameters"):
         task = Task()
-        task.step(fn=fn, map="data")
+        task.step(fn=fn, map_arg="data")
 
     with pytest.raises(AssertionError, match="The parameter 'map_type' must be one of"):
         task = Task()
-        task.step(fn=fn, map="x", map_type="nonexistant")
+        task.step(fn=fn, map_arg="x", map_type="nonexistant")
 
     with pytest.raises(AssertionError, match="Cannot verify that predicate 'is_dag' holds"):
         task = Task()
@@ -180,19 +180,19 @@ def test_assertions():
     with pytest.raises(AssertionError, match=f"Parameter 'map' requires an iterable input argument"):
         task = Task()
         task.register(x=1)
-        task.step(fn=fn, map="x")
+        task.step(fn=fn, map_arg="x")
         task.run()
 
     with pytest.raises(AssertionError, match=f"Cannot use 'map_type=keys' on non-mappable argument"):
         task = Task()
         task.register(data=[1, 2, 3])
-        task.step(identity, map="data", map_type="keys")
+        task.step(identity, map_arg="data", map_type="keys")
         task.run()
 
     with pytest.raises(AssertionError, match=f"Cannot use 'map_type=items' on non-mappable argument"):
         task = Task()
         task.register(data=[1, 2, 3])
-        task.step(identity, map="data", map_type="items")
+        task.step(identity, map_arg="data", map_type="items")
         task.run()
 
     # run

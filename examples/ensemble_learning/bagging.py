@@ -77,14 +77,14 @@ class BaggingClassifier(BaseEstimator, ClassifierMixin, Task):
             samples = np.random.choice(range(n_samples), n_bootstrap_samples)
             yield X_fit[samples], y_fit[samples]
 
-    @step(map="_bootstrap")
+    @step(map_arg="_bootstrap")
     def _fit_estimator(self, _bootstrap):
         X, y = _bootstrap
         estimator = clone(self.base_estimator)
         estimator.fit(X, y)
         return estimator
 
-    @step(map="_fit_estimator")
+    @step(map_arg="_fit_estimator")
     def _predict_estimator(self, X_pred, _fit_estimator):
         return _fit_estimator.predict_proba(X_pred)
 

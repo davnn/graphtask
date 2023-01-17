@@ -74,7 +74,7 @@ class AdaBoostClassifier(BaseEstimator, ClassifierMixin, Task):
             weights *= np.exp(weight_factor * incorrect_labels)
             yield weight_factor, model
 
-    @step(map="_fit_estimator")
+    @step(map_arg="_fit_estimator")
     def _predict_all(self, _fit_estimator, x_test):
         weight, model = _fit_estimator
         y_pred = model.predict(x_test)
