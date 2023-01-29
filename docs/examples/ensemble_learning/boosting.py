@@ -25,7 +25,6 @@ from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
 
 from graphtask import Task, step
-from graphtask.visualize import to_pygraphviz
 
 
 # %%
@@ -50,7 +49,7 @@ class AdaBoostClassifier(BaseEstimator, ClassifierMixin, Task):
         self.classes_, y = np.unique(y, return_inverse=True)
         self.n_classes_ = len(self.classes_)
         self.register(x_train=X, y=y, weights=np.repeat(1 / len(y), len(y)))
-        self.run("_fit_estimator")
+        self._fit_estimator()
         return self
 
     def predict(self, X):
@@ -60,7 +59,7 @@ class AdaBoostClassifier(BaseEstimator, ClassifierMixin, Task):
     def predict_proba(self, X):
         check_is_fitted(self)
         self.register(x_test=X)
-        return self.run("_predict_proba")
+        return self._predict_proba()
 
     @step
     def _fit_estimator(self, models, x_train, y, weights):
@@ -74,7 +73,7 @@ class AdaBoostClassifier(BaseEstimator, ClassifierMixin, Task):
             weights *= np.exp(weight_factor * incorrect_labels)
             yield weight_factor, model
 
-    @step(map_arg="_fit_estimator")
+    @step(map="_fit_estimator")
     def _predict_all(self, _fit_estimator, x_test):
         weight, model = _fit_estimator
         y_pred = model.predict(x_test)
@@ -89,7 +88,7 @@ class AdaBoostClassifier(BaseEstimator, ClassifierMixin, Task):
 # Let us now instantiate the classifier and look at the inferred DAG.
 
 model = AdaBoostClassifier()
-to_pygraphviz(model).draw("model.png")
+model.show().draw("model.png")
 
 
 # %%
