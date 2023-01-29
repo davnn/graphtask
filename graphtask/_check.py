@@ -7,7 +7,7 @@ from collections.abc import Mapping
 
 import networkx as nx
 
-__all__ = ["is_dag", "is_iterable", "is_mapping", "verify"]
+__all__ = ["is_dag", "is_iterable", "is_mapping", "is_mutable_mapping", "verify"]
 
 
 def is_iterable(iterable: Any) -> bool:
@@ -33,8 +33,26 @@ def is_iterable(iterable: Any) -> bool:
         return False
 
 
+def is_mutable_mapping(mapping: Any) -> bool:
+    """Check if given `mapping` is a mutable mapping type, which it is, if it is a mapping with ``__setitem__``
+
+    Parameters
+    ----------
+    mapping: Any
+        Any value that may be a mutable mapping.
+
+    Returns
+    -------
+    bool
+        ``True`` if ``mapping`` is a mapping with ``__setitem__``, ``False`` otherwise.
+    """
+    # This seems to be a safer check than ``isinstance(mapping, MutableMapping)``, because we don't require
+    # ``__delitem__``, which is required by ``MutableMapping``.
+    return is_mapping(mapping) and hasattr(mapping, "__setitem__")
+
+
 def is_mapping(mapping: Any) -> bool:
-    """Check if given `mapping` is a mapping type, which it is, if it is an instance of `Mapping`
+    """Check if given `mapping` is a mapping type, which it is, if it is an instance of ``Mapping``
 
     Parameters
     ----------

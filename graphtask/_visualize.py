@@ -2,14 +2,19 @@
 """
 Visualization of a `Task` using `pygraphviz`.
 """
-from typing import Union, overload
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, overload
 
 from enum import Enum
 
 import networkx as nx
 
-from graphtask import Task
-from graphtask._task import MAP_ATTRIBUTE, TYPE_ATTRIBUTE, NodeType
+if TYPE_CHECKING:
+    from graphtask._task import Task
+
+from graphtask._globals import STEP_ATTRIBUTE
+from graphtask._step import Step, StepKind
 
 try:
     import pygraphviz as pg
@@ -31,16 +36,15 @@ _NODE_ATTRIBUTES = lambda node_type: {
     "fontsize": 10,
     **get_node_style(node_type),
 }
-_EDGE_ATTRIBUTES = lambda is_map: {"color": "black", "arrowsize": 2 / 3, "style": "dotted" if is_map else "solid"}
+_EDGE_ATTRIBUTES = {"color": "black", "arrowsize": 2 / 3, "style": "solid"}
 
 
-def get_node_style(node_type: NodeType) -> dict[str, str]:
-    if node_type == NodeType.ATTRIBUTE:
-        return {"style": "rounded", "shape": "box"}
-    elif node_type == NodeType.FUNCTION:
-        return {"style": "filled", "shape": "box"}
-    elif node_type in [NodeType.MAP_KEYS, NodeType.MAP_VALUES, NodeType.MAP_ITEMS]:
-        return {"style": "filled", "shape": "box3d"}
+def get_node_style(step: Step | None) -> dict[str, str]:
+    if step is not None:
+        if step.kind == StepKind.FUNCTION:
+            return {"style": "filled", "shape": "box"}
+        else:  # mapping type
+            return {"style": "filled", "shape": "box3d"}
     else:
         return {"style": "rounded,dashed", "shape": "box"}
 
@@ -60,7 +64,9 @@ def to_pygraphviz(graph: nx.DiGraph) -> pg.AGraph:
     ...
 
 
-def to_pygraphviz(graph: Union[Task, nx.DiGraph], orientation: Orientation = Orientation.VERTICAL) -> pg.AGraph:
+def to_pygraphviz(graph: Task | nx.DiGraph, *, orientation: Orientation = Orientation.VERTICAL) -> pg.AGraph:
+    from graphtask._task import Task
+
     if isinstance(graph, Task):
         graph = graph._graph
 
@@ -72,14 +78,13 @@ def to_pygraphviz(graph: Union[Task, nx.DiGraph], orientation: Orientation = Ori
     # set node attributes
     for v in graph.nodes:
         node = agraph.get_node(v)
-        node_type = graph.nodes[v].get(TYPE_ATTRIBUTE, None)
+        node_type = graph.nodes[v].get(STEP_ATTRIBUTE, None)
         node.attr.update(_NODE_ATTRIBUTES(node_type))
 
     # set edge attributes
     for u, v in graph.edges:
-        is_map = graph.edges[u, v][MAP_ATTRIBUTE]
         edge = agraph.get_edge(u, v)
-        edge.attr.update(_EDGE_ATTRIBUTES(is_map))
+        edge.attr.update(_EDGE_ATTRIBUTES)
 
     agraph.layout(_GRAPH_LAYOUT)
     return agraph

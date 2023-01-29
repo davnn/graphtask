@@ -1,22 +1,25 @@
 """
 Definition of a `Task` and `step`.
 """
+from typing import Any, Optional, Union, cast, overload
+
 import inspect
-import logging
-import warnings
-from collections.abc import Callable, Hashable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from copy import copy
+from dataclasses import asdict
+from logging import getLogger
 from sys import maxsize
-from typing import Any, Optional, Union, overload
+from warnings import warn
 
 import networkx as nx
+from joblib import Parallel, delayed
+from stackeddag.core import edgesToText, mkEdges, mkLabels  # type: ignore[reportUnknownVariableType]
 
 from graphtask._check import is_dag, verify
-from graphtask._globals import STEP_ATTRIBUTE, MapTypeT, DecorableT
-from graphtask._step import Step, StepParams, StepArgs
-from joblib import Parallel, delayed
-from vendor.stackeddag import edgesToText, mkEdges, mkLabels
+from graphtask._globals import STEP_ATTRIBUTE, DecorableT, MapTypeT
+from graphtask._step import Step, StepArgs, StepFnT, StepParams
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 __all__ = ["Task", "step"]
 
@@ -101,7 +104,9 @@ def step(
 
     def decorator(fn: DecorableT) -> DecorableT:
         setattr(
-            fn, STEP_ATTRIBUTE, dict(map=map, map_type=map_type, rename=rename, args=args, kwargs=kwargs, alias=alias)
+            fn,
+            STEP_ATTRIBUTE,
+            StepParams(map=map, map_type=map_type, rename=rename, args=args, kwargs=kwargs, alias=alias),
         )
         return fn
 
@@ -132,8 +137,8 @@ class TaskMeta(type):
 
             # only add steps for attributes that are callable and contain the `STEP_ATTRIBUTE`
             if callable(attr) and hasattr(attr, STEP_ATTRIBUTE):
-                kwargs = getattr(attr, STEP_ATTRIBUTE)
-                obj.step(attr, **kwargs)
+                step_params = getattr(attr, STEP_ATTRIBUTE)
+                setattr(obj, attr_name, obj.step(attr, **asdict(step_params)))
 
         return obj
 
@@ -161,7 +166,7 @@ class Task(metaclass=TaskMeta):
         args: Optional[Union[str, Iterable[str]]] = None,
         kwargs: Optional[Union[str, Iterable[str]]] = None,
         alias: Optional[Mapping[str, str]] = None,
-    ) -> DecorableT:
+    ) -> Step:
         """Step invoked with a `fn`, returns the `fn`"""
         ...
 
@@ -175,7 +180,7 @@ class Task(metaclass=TaskMeta):
         args: Optional[Union[str, Iterable[str]]] = None,
         kwargs: Optional[Union[str, Iterable[str]]] = None,
         alias: Optional[Mapping[str, str]] = None,
-    ) -> Callable[[DecorableT], DecorableT]:
+    ) -> Callable[[DecorableT], Step]:
         """Step invoked without a `fn`, return a decorator"""
         ...
 
@@ -189,10 +194,10 @@ class Task(metaclass=TaskMeta):
         args: Optional[Union[str, Iterable[str]]] = None,
         kwargs: Optional[Union[str, Iterable[str]]] = None,
         alias: Optional[Mapping[str, str]] = None,
-    ) -> Union[DecorableT, Callable[[DecorableT], DecorableT]]:
+    ) -> Union[Step, Callable[[DecorableT], Step]]:
         """A decorator (or decorator factory) to add steps to the graph (documented at :meth:`graphtask.step`)"""
 
-        def decorator(fn: DecorableT) -> DecorableT:
+        def decorator(fn: DecorableT) -> Step:
             params = get_function_params(fn)
             step_args = determine_step_arguments(params, args, kwargs)
             # combine all parameters to a single `set` of parameters (the dependencies in the graph)
@@ -219,12 +224,20 @@ class Task(metaclass=TaskMeta):
                 Any
                     Return value of the original (unprocessed) function.
                 """
+                logger.debug(f"Passed arguments '{passed}' to processed function.")
                 invert_alias_step_parameters(passed, alias)
                 positional = process_positional_args(passed, step_args.positional)
                 return fn(*positional, **passed)
 
             # add the processed function to the graph
             logger.debug(f"Adding node '{step_name}' to graph")
+
+            self._graph.add_node(step_name)
+            predecessors = set(self._graph.predecessors(step_name))
+            assert all(p in params for p in predecessors), (
+                f"Cannot update node '{step_name}' with missing dependencies '{predecessors.difference(params)}', "
+                f"you should rebuild the entire task if you intend to replace steps with remove dependencies."
+            )
 
             # make sure the fn's parameters are nodes in the graph
             for param in params:
@@ -235,21 +248,13 @@ class Task(metaclass=TaskMeta):
                 name=step_name,
                 fn=fn_processed,
                 args=step_args,
-                task=self,
                 signature=inspect.signature(fn),
-                dependencies=nx.subgraph_view(self._graph, filter_node=lambda node: node in params),
-                # dependencies=nx.edge_subgraph(self._graph, [(param, step_name) for param in params]),
-                params=StepParams(
-                    map_arg=map,
-                    map_type=map_type,
-                    rename=rename,
-                    args=args,
-                    kwargs=kwargs,
-                    alias=alias
-                )
+                task=self[step_name],
+                params=StepParams(map=map, map_type=map_type, rename=rename, args=args, kwargs=kwargs, alias=alias),
             )
 
-            self._graph.add_node(step_name, **{STEP_ATTRIBUTE: step})
+            # add the step to the node
+            self._graph.nodes[step_name][STEP_ATTRIBUTE] = step
 
             # make sure that the resulting graph is a DAG
             verify(is_dag, self._graph)
@@ -273,20 +278,107 @@ class Task(metaclass=TaskMeta):
             difference between nodes registered using ``register`` or ``step``.
         """
         for key, value in kwargs.items():
+            assert (
+                key not in self._graph.nodes or len(p := list(self._graph.predecessors(key))) == 0
+            ), f"Cannot register existing node with predecessors '{p}' without predecessors."
             logger.debug(f"Registering node {key}")
-            fn: Callable[[Any], Any] = (lambda v=value: lambda: v)()
-            self._graph.add_node(key,
-                                 **{STEP_ATTRIBUTE: Step(name=key, task=self, fn=fn, signature=inspect.signature(fn))})
+            fn: StepFnT = (lambda v=value: lambda: v)()  # type: ignore[reportUnknownLambdaType]
+            self._graph.add_node(
+                key, **{STEP_ATTRIBUTE: Step(name=key, fn=fn, signature=inspect.signature(fn), task=self)}
+            )
 
-    def run(self, node: Optional[str] = None) -> Any:
+    def get(self, drop_last: bool = False, include_all: bool = False, **replacements: Any) -> dict[str, Any]:
         """Run the full task if no `node` is given, otherwise run up until `node`.
 
         Parameters
         ----------
-        node: optional str
-            Optional identifier of the ``node`` to run. This runs all dependencies of ``node`` and returns the
-            value returned by ``node``. If node is a function, this is equal to calling the function, though without
-            having to resolve all dependencies manually.
+        drop_last: bool
+            Remove the last topological generation from further processing.
+        include_all: bool
+            Return all graph elements as a dictionary of node names to retrieved values in the graph.
+        **replacements: Any
+            Replace specific ``nodes`` in the graph without invoking the replaced nodes.
+
+        Returns
+        -------
+        dict[str, Any]
+            A dictionary of node names to their resolved or replaced values.
+
+        Raises
+        ------
+        AssertionError
+            If the specified ``node`` is not found in the graph.
+        """
+        assert all(r in self._graph.nodes for r in replacements), (
+            f"Replacement **kwargs must refer to existing nodes, but found replacements"
+            f" '{replacements}' for nodes '{self._graph.nodes}'."
+        )
+        verify(is_dag, self._graph)  # this assertion should always hold, except the user messes with `_graph`
+
+        # identify the topological generations, which can be parallelized
+        gens = topological_generations(self._graph)[:-1] if drop_last else topological_generations(self._graph)
+
+        dependencies: dict[str, Any] = {}
+        last_dependencies: dict[str, Any] = {}
+        for generation in gens:
+            result = self._parallel()(delayed(self._run_step)(node, replacements, dependencies) for node in generation)
+            last_dependencies = dict(zip(generation, result))
+            dependencies = dependencies | last_dependencies
+
+        return dependencies if include_all else last_dependencies
+
+    def show(self):
+        from graphtask._visualize import to_pygraphviz
+
+        return to_pygraphviz(self)
+
+    def _run_step(self, node: str, replacements: dict[str, Any], dependencies: dict[str, Any]) -> Any:
+        """Safely invoke a step of the graph with existence checks.
+
+        Parameters
+        ----------
+        node: str
+            Identifier of the node to run.
+        replacements: dict[str, Any]
+            Collection of replacements to use as dependencies instead of resolving them using the graph.
+        dependencies: dict[str, Any]
+            Collection of all necessary dependencies to invoke the function.
+
+        Returns
+        -------
+        Any
+            The output of running a ``Step``.
+        """
+        if node in replacements:
+            logger.debug(f"Replacement used for node '{node}'.")
+            return replacements[node]
+
+        current_node = self._graph.nodes[node]
+        logger.debug(f"Current node:         {repr(node)}")
+        assert STEP_ATTRIBUTE in current_node, f"Node '{node}' not defined, but set as a dependency."
+        step = current_node[STEP_ATTRIBUTE]
+        logger.debug(f"Current step:         {repr(step)}")
+        direct_predecessors = list(self._graph.predecessors(node))
+        direct_dependencies = {k: v for k, v in dependencies.items() if k in direct_predecessors}
+        assert len(direct_predecessors) == len(
+            direct_dependencies
+        ), f"Not all dependencies defined for direct predecessors '{direct_predecessors}' of node '{node}'"
+        return step.run(**direct_dependencies)
+
+    def __getitem__(self, item: str):
+        assert item in self._graph.nodes, f"Attempted to retrieve node '{item}', but it was not found in the graph."
+        view = copy(self)
+        view._graph = nx.induced_subgraph(self._graph, [item] + bfs_predecessors(view._graph, item))
+        return view
+
+    def __call__(self, **replacements: Any) -> Any:
+        """
+        Run the task and return the topologically last value (if there is one last node), or a tuple of last values.
+
+        Parameters
+        ----------
+        **replacements: Any
+            Replace specific ``nodes`` in the graph without invoking the replaced nodes.
 
         Returns
         -------
@@ -294,41 +386,9 @@ class Task(metaclass=TaskMeta):
             The value of the last node if there is a single last node in the graph, otherwise a tuple of values of all
             last nodes. If the graph is empty, an empty tuple is returned. If ``node`` is specified, the value of
             the specified node is returned instead of the last node.
-
-        Raises
-        ------
-        AssertionError
-            If the specified ``node`` is not found in the graph.
         """
-        verify(is_dag, self._graph)  # this assertion should always hold, except the user messes with `_graph`
-        assert node is None or node in self._graph.nodes, f"The 'node' must be in Task, but did not find '{node}'."
-        gens = topological_generations(self._graph) if node is None else topological_predecessors(self._graph, node)
-
-        result = ()  # only relevant if no generations
-        for generation in gens:  # we are only interested in the last result here (that's the one to return)
-            result = self._parallel()(delayed(self._materialize)(node) for node in generation)
-
-        # return the result of the last generation
-        return result[0] if len(result) == 1 else tuple(result)
-
-    def _materialize(self, node: Hashable) -> Any:
-        """Materialize the result of calling a node as an edge weight stored in `DATA_ATTRIBUTE`.
-
-        Parameters
-        ----------
-        node: Hashable
-            Identifier of the node to materialize.
-
-        Returns
-        -------
-        Any
-            The materialized value of the node.
-        """
-        current_node = self._graph.nodes[node]
-        logger.debug(f"Current node:         {repr(node)}")
-        assert STEP_ATTRIBUTE in current_node, f"Node '{node}' not defined, but set as a dependency."
-        step = current_node[STEP_ATTRIBUTE]
-        return step.materialize()
+        result = tuple(self.get(**replacements).values())
+        return result[0] if len(result) == 1 else result
 
     def __str__(self) -> str:
         return f"Task(n_jobs={self.n_jobs})"
@@ -403,7 +463,7 @@ def determine_step_arguments(
     """
     param_names: list[Union[str, list[str]]] = []
     param_kinds: list[inspect._ParameterKind] = []  # type:ignore[reportPrivateUsage]
-    pos_only_names = []
+    pos_only_names: list[str] = []
     has_var_arg = False
     has_var_kwarg = False
     for param in params:
@@ -412,6 +472,8 @@ def determine_step_arguments(
         param_kinds.append(kind)
 
         # replace the *args and **kwargs param with a list of replacements
+        # we do not append the variable arguments directly to a list[str], because that would make it more difficult to
+        # correctly check for duplicates in the arguments; we want to know where the duplicates stem from.
         if kind == inspect.Parameter.VAR_POSITIONAL:
             assert args is not None, f"Variable argument '*{name}' requires 'args' parameter to be set in 'step'."
             args = [args] if isinstance(args, str) else list(args)
@@ -429,36 +491,36 @@ def determine_step_arguments(
             param_names.append(name)
 
     if has_var_arg:
-        duplicates = [arg for arg in args if arg in param_names]
+        duplicates = [arg for arg in cast(list[str], args) if arg in param_names]
         assert not any(duplicates), (
             f"The names provided to 'args' cannot be duplicates of the "
             f"function parameters, but found duplicates: '{duplicates}'."
         )
 
     if has_var_kwarg:
-        duplicates = [arg for arg in kwargs if arg in param_names]
+        duplicates = [arg for arg in cast(list[str], kwargs) if arg in param_names]
         assert not any(duplicates), (
             f"The names provided to 'kwargs' cannot be duplicates of the "
             f"function parameters, but found duplicates: '{duplicates}'."
         )
 
     if has_var_arg and has_var_kwarg:
-        duplicates = [arg for arg in args if arg in kwargs]
+        duplicates = [arg for arg in cast(list[str], args) if arg in cast(list[str], kwargs)]
         assert not any(
             duplicates
         ), f"There cannot be duplicate names provided to 'args' and 'kwargs', but found duplicates: '{duplicates}."
 
     if args is not None and not has_var_arg:
-        warnings.warn("Provided 'args' argument for 'step', but no '*args' parameter found.")
+        warn("Provided 'args' argument for 'step', but no '*args' parameter found.")
 
     if kwargs is not None and not has_var_kwarg:
-        warnings.warn("Provided 'kwargs' argument for 'step', but no '**kwargs' parameter found.")
+        warn("Provided 'kwargs' argument for 'step', but no '**kwargs' parameter found.")
 
     # split into positional and keyword arguments according to idx and flatten the nested `args` and `kwargs`
     kw_idx = first_keyword_idx(param_kinds)
     pos_names = flatten_names(param_names[:kw_idx])
     kw_names = flatten_names(param_names[kw_idx:])
-    pos_only = pos_only_names + args
+    pos_only = pos_only_names + cast(list[str], args) if args is not None else pos_only_names
     return StepArgs(positional=pos_names, keyword=kw_names, positional_only=pos_only)
 
 
@@ -499,12 +561,13 @@ def first_keyword_idx(param_kinds: list[inspect._ParameterKind]) -> int:  # type
 
 def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) -> None:
     """Rename function parameters to use a given alias."""
-    for original_name, replacement_name in alias.items() if alias is not None else {}:
-        if original_name in params:
-            params.remove(original_name)
-            params.add(alias[original_name])
-        else:
-            warnings.warn(f"Found alias '{original_name}', but '{original_name}' is not in the arguments.")
+    if alias is not None:
+        for original_name, replacement_name in alias.items():
+            if original_name in params:
+                params.remove(original_name)
+                params.add(replacement_name)
+            else:
+                warn(f"Found alias '{original_name}', but '{original_name}' is not in the arguments.")
 
 
 def invert_alias_step_parameters(params: dict[str, Any], alias: Optional[Mapping[str, str]]) -> None:
@@ -518,7 +581,10 @@ def invert_alias_step_parameters(params: dict[str, Any], alias: Optional[Mapping
 def verify_map_parameter(params: set[str], map: Optional[str]) -> None:
     """Ensure that given `split` and `map` are in the (final) parameter set."""
     if map is not None:
-        assert map in params, f"Step parameter 'map' must refer to one of the function arguments, but found '{map}'."
+        assert map in params, (
+            f"Step parameter 'map' must refer to one of the function arguments, but found arguments"
+            f"'{params}' and parameter '{map}'."
+        )
 
 
 def get_function_params(fn: Callable[..., Any]) -> list[inspect.Parameter]:
@@ -526,19 +592,19 @@ def get_function_params(fn: Callable[..., Any]) -> list[inspect.Parameter]:
     return list(inspect.signature(fn).parameters.values())
 
 
-def bfs_successors(graph: nx.DiGraph, node: Hashable) -> list[Hashable]:  # pragma: no cover (currently not used)
+def bfs_successors(graph: nx.DiGraph, node: str) -> list[str]:  # pragma: no cover (currently not used)
     """The names of all successors to `node`"""
-    result: list[Hashable] = list(nx.bfs_tree(graph, node))[1:]
+    result: list[str] = list(nx.bfs_tree(graph, node))[1:]
     return result
 
 
-def bfs_predecessors(graph: nx.DiGraph, node: Hashable) -> list[Hashable]:  # pragma: no cover (currently not used)
+def bfs_predecessors(graph: nx.DiGraph, node: str) -> list[str]:  # pragma: no cover (currently not used)
     """The names of all predecessors to `node`"""
-    result: list[Hashable] = list(nx.bfs_tree(graph.reverse(copy=False), node))[1:]
+    result: list[str] = list(nx.bfs_tree(graph.reverse(copy=False), node))[1:]
     return result
 
 
-def topological_successors(graph: nx.DiGraph, node: Hashable) -> list[list[Hashable]]:
+def topological_successors(graph: nx.DiGraph, node: str) -> list[list[str]]:
     """The names of all invalidated nodes (grouped in generations) if `node` changed"""
     bfs_tree = nx.bfs_tree(graph, node)
     subgraph = nx.induced_subgraph(graph, bfs_tree.nodes)
@@ -546,12 +612,12 @@ def topological_successors(graph: nx.DiGraph, node: Hashable) -> list[list[Hasha
     return list(generations)
 
 
-def topological_predecessors(graph: nx.DiGraph, node: Hashable) -> list[list[Hashable]]:
+def topological_predecessors(graph: nx.DiGraph, node: str) -> list[list[str]]:
     """The names of all dependency nodes (grouped in generations) for `node`"""
     generations = topological_successors(graph.reverse(copy=False), node)
     return list(reversed(generations))
 
 
-def topological_generations(graph: nx.DiGraph) -> list[list[Hashable]]:
+def topological_generations(graph: nx.DiGraph) -> list[list[str]]:
     """The names of all nodes in the graph grouped into generations"""
     return list(nx.topological_generations(graph))
