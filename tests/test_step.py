@@ -1,9 +1,13 @@
 """
 Test the equivalence of `step` and the `@step` decorator.
 """
+from collections.abc import Callable
+
+import pytest
 from hypothesis import given
 
 from graphtask import Task, step
+from graphtask._step import InvalidStepArgumentException
 from tests import *
 
 
@@ -50,7 +54,7 @@ def test_fn_signatures(a, b, c, d):
     for fn in [fn9, fn10, fn11]:
         task.step(fn=fn, args=["c"], kwargs=["d"])
 
-    for result in task.run():
+    for result in task():
         assert a + b * c + d == result
 
 
@@ -103,8 +107,78 @@ def test_decorator_signatures(a, b, c, d):
     def fn11(a, /, *c, b, **d):
         return a + b * c[0] + list(d.values())[0]
 
-    for result in task.run():
-        assert a + b * c + d == result
+    steps = [fn1, fn2, fn3, fn4, fn5, fn6, fn7, fn8, fn9, fn10, fn11]
+    for step, result in zip(steps, task()):
+        assert a + b * c + d == result == step()
+
+
+def test_invalid_signature_raises():
+    task_fun = Task()
+    task_fun.register(a=0)
+
+    @task_fun.step
+    def pos_or_kw(a):
+        return a
+
+    @task_fun.step
+    def pos_only(a, /):
+        return a
+
+    @task_fun.step
+    def kw_only(*, a):
+        return a
+
+    class T(Task):
+        @step
+        def pos_or_kw(self, a):
+            return a
+
+        @step
+        def pos_only(self, a, /):
+            return a
+
+        @step
+        def kw_only(self, *, a):
+            return a
+
+    task_cls = T()
+    task_cls.register(a=0)
+
+    def raises_invalid_step(match: str, *examples: Callable):
+        """Check if a given callable exception raises an ``InvalidStepArgumentException`` for a given ``match``"""
+        for example in examples:
+            with pytest.raises(InvalidStepArgumentException, match=match):
+                example()
+
+    raises_invalid_step(
+        "Step takes 1 positional arguments",
+        lambda: pos_or_kw(1, 2),
+        lambda: task_cls.pos_or_kw(1, 2)
+    )
+
+    raises_invalid_step(
+        "Step takes 0 positional arguments",
+        lambda: kw_only(0),
+        lambda: task_cls.kw_only(0)
+    )
+
+    raises_invalid_step(
+        "Step got unexpected keyword arguments",
+        lambda: pos_or_kw(nonexistant=0),
+        lambda: task_cls.pos_or_kw(nonexistant=0)
+    )
+
+    raises_invalid_step(
+        "Step got positional-only arguments passed as keyword",
+        lambda: pos_only(a=0),
+        lambda: task_cls.pos_only(a=0)
+    )
+
+    raises_invalid_step(
+        "Step got duplicate arguments",
+        lambda: pos_or_kw(0, a=0),
+        lambda: task_cls.pos_or_kw(0, a=0)
+    )
 
 
 @given(a=ints, b=ints, c=ints, d=ints)
@@ -156,7 +230,7 @@ def test_method_signatures(a, b, c, d):
 
     task = T()
     task.register(a=a, b=b, c=c, d=d)
-    for result in task.run():
+    for result in task():
         assert a + b * c + d == result
 
 
@@ -190,4 +264,37 @@ def test_equivalence(data):
     task_cls = T()
     task_cls.register(data=data)
 
-    assert task_fun.run() == task_dec.run() == task_cls.run()
+    assert task_fun() == task_dec() == task_cls()
+
+
+@given(data=create_nonempty_dict(basics))
+def test_map_items_raises(data):
+    with pytest.raises(AssertionError, match="Must return a 'key, value' tuple from function mapping over `items`"):
+        task = Task()
+        task.register(data=data)
+        task.step(lambda data: data[0], map="data", map_type="items")
+        task()
+
+
+def test_wrong_step_kind_raises():
+    with pytest.raises(AssertionError, match="The parameter 'map_type' must be one of"):
+        task = Task()
+        task.step(lambda data: data, map="data", map_type="wrong")
+        task()
+
+
+def test_map_noniterable_raises():
+    with pytest.raises(AssertionError, match=f"Data for 'map' argument 'x' must be iterable"):
+        task = Task()
+        task.register(x=1)
+        task.step(fn=lambda x: x, map="x")
+        task()
+
+
+@given(data=create_immutable_mapping(basics))
+def test_immutable_mapping_warning(data):
+    with pytest.warns(UserWarning, match="Mapping over non-mutable mapping type"):
+        task = Task()
+        task.register(data=data)
+        task.step(lambda data: data, map="data")
+        task()
