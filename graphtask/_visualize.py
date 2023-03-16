@@ -1,12 +1,9 @@
-# type: ignore
-"""
-Visualization of a `Task` using `pygraphviz`.
-"""
+# type: ignore[all]
+"""Visualization of a `Task` using `pygraphviz`."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, overload
-
 from enum import Enum
+from typing import TYPE_CHECKING, overload
 
 import networkx as nx
 
@@ -21,32 +18,14 @@ try:
 except ImportError as err:  # pragma: no cover
     raise ImportError(
         "Graph visualisation requires 'pygraphviz' to be installed, but no installation found. See "
-        + "http://pygraphviz.github.io/ for guidance. If you install 'graphtask' with pip, use "
-        + "'pip install graphtask[visualize]' to install the optional dependencies."
+        "http://pygraphviz.github.io/ for guidance. If you install 'graphtask' with pip, use "
+        "'pip install graphtask[visualize]' to install the optional dependencies.",
     ) from err
 
 __all__ = ["to_pygraphviz", "Orientation"]
 
 _GRAPH_LAYOUT = "dot"
-_GRAPH_ATTRIBUTES = lambda orientation: {"rankdir": orientation, "bgcolor": "white"}
-_NODE_ATTRIBUTES = lambda node_type: {
-    "color": "black",
-    "fillcolor": "#f0f0f0",
-    "fontcolor": "#111111",
-    "fontsize": 10,
-    **get_node_style(node_type),
-}
 _EDGE_ATTRIBUTES = {"color": "black", "arrowsize": 2 / 3, "style": "solid"}
-
-
-def get_node_style(step: Step | None) -> dict[str, str]:
-    if step is not None:
-        if step.kind == StepKind.FUNCTION:
-            return {"style": "filled", "shape": "box"}
-        else:  # mapping type
-            return {"style": "filled", "shape": "box3d"}
-    else:
-        return {"style": "rounded,dashed", "shape": "box"}
 
 
 class Orientation(Enum):
@@ -73,13 +52,13 @@ def to_pygraphviz(graph: Task | nx.DiGraph, *, orientation: Orientation = Orient
     agraph = nx.nx_agraph.to_agraph(graph)
 
     # set graph attributes
-    agraph.graph_attr.update(_GRAPH_ATTRIBUTES(orientation))
+    agraph.graph_attr.update(_graph_attributes(orientation))
 
     # set node attributes
     for v in graph.nodes:
         node = agraph.get_node(v)
-        node_type = graph.nodes[v].get(STEP_ATTRIBUTE, None)
-        node.attr.update(_NODE_ATTRIBUTES(node_type))
+        step = graph.nodes[v].get(STEP_ATTRIBUTE, None)
+        node.attr.update(_node_attributes(step))
 
     # set edge attributes
     for u, v in graph.edges:
@@ -88,3 +67,22 @@ def to_pygraphviz(graph: Task | nx.DiGraph, *, orientation: Orientation = Orient
 
     agraph.layout(_GRAPH_LAYOUT)
     return agraph
+
+
+def _graph_attributes(orientation: str) -> dict[str, str]:
+    return {"rankdir": orientation, "bgcolor": "white"}
+
+
+def _node_attributes(step: Step | None) -> dict[str, any]:
+    return {"color": "black", "fillcolor": "#f0f0f0", "fontcolor": "#111111", "fontsize": 10, **_get_node_style(step)}
+
+
+def _get_node_style(step: Step | None) -> dict[str, str]:
+    if step is not None:
+        if step.kind == StepKind.FUNCTION:
+            return {"style": "filled", "shape": "box"}
+        # must be mapping type
+        return {"style": "filled", "shape": "box3d"}
+
+    # otherwise
+    return {"style": "rounded,dashed", "shape": "box"}

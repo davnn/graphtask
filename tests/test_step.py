@@ -7,7 +7,7 @@ import pytest
 from hypothesis import given
 
 from graphtask import Task, step
-from graphtask._step import InvalidStepArgumentException
+from graphtask._step import InvalidStepArgumentError
 from tests import *
 
 
@@ -145,9 +145,9 @@ def test_invalid_signature_raises():
     task_cls.register(a=0)
 
     def raises_invalid_step(match: str, *examples: Callable):
-        """Check if a given callable exception raises an ``InvalidStepArgumentException`` for a given ``match``"""
+        """Check if a given callable exception raises an ``InvalidStepArgumentError`` for a given ``match``"""
         for example in examples:
-            with pytest.raises(InvalidStepArgumentException, match=match):
+            with pytest.raises(InvalidStepArgumentError, match=match):
                 example()
 
     raises_invalid_step(
@@ -288,13 +288,4 @@ def test_map_noniterable_raises():
         task = Task()
         task.register(x=1)
         task.step(fn=lambda x: x, map="x")
-        task()
-
-
-@given(data=create_immutable_mapping(basics))
-def test_immutable_mapping_warning(data):
-    with pytest.warns(UserWarning, match="Mapping over non-mutable mapping type"):
-        task = Task()
-        task.register(data=data)
-        task.step(lambda data: data, map="data")
         task()

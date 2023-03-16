@@ -1,31 +1,27 @@
-"""
-Define the ``Step`` data type, which wraps and enhances the function given to ``Task.step``.
-"""
+"""Define the ``Step`` data type, which wraps and enhances the function given to ``Task.step``."""
 
 from __future__ import annotations
-
-from typing import TYPE_CHECKING, Any, Protocol, cast, get_args
 
 from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from inspect import Signature
 from logging import getLogger
-from warnings import warn
+from typing import TYPE_CHECKING, Any, Protocol, cast, get_args
 
 if TYPE_CHECKING:
     from graphtask._task import Task
 
 from joblib import Parallel, delayed
 
-from graphtask._check import is_iterable, is_mapping, is_mutable_mapping
+from graphtask._check import is_iterable, is_mapping
 from graphtask._globals import MapArgsT, MapTypeT
 
 logger = getLogger(__name__)
 
 
 class StepFnT(Protocol):
-    """A function of keyword-only arguments (the dependencies in the graph) to the original function return value"""
+    """A function of keyword-only arguments (the dependencies in the graph) to the original function return value."""
 
     def __call__(self, **kw: Any) -> Any:  # pragma: no cover
         ...
@@ -40,19 +36,22 @@ class MapFnT(Protocol):
 
 @dataclass
 class StepParams:
-    """Single source of truth for parameters of @step decorators defined in ``Task``"""
+    """Single source of truth for parameters of @step decorators defined in ``Task``."""
 
     map: str | None = None
     map_type: MapTypeT = "values"
+    flatten: bool = True
     rename: str | None = None
     args: str | Iterable[str] | None = None
     kwargs: str | Iterable[str] | None = None
     alias: Mapping[str, str] | None = None
+    n_jobs: int = 1
+    backend: str = "threading"
 
 
 @dataclass
 class StepArgs:
-    """Classification of __call__ arguments, such that the original function signature can be reconstructed"""
+    """Classification of __call__ arguments, such that the original function signature can be reconstructed."""
 
     positional: list[str] = field(default_factory=list)
     keyword: list[str] = field(default_factory=list)
@@ -68,7 +67,7 @@ class StepKind(Enum):
     MAP_ITEMS = "map_items"
 
 
-class InvalidStepArgumentException(Exception):
+class InvalidStepArgumentError(Exception):
     ...
 
 
@@ -81,7 +80,6 @@ class Step:
         task: Task,
         args: StepArgs = StepArgs(),
         params: StepParams = StepParams(),
-        n_jobs: int = 1,
     ) -> None:
         super().__init__()
         self.name = name
@@ -91,12 +89,12 @@ class Step:
         self.args = args
         self._task = task
         self._parameters = params
-        self._parallel = lambda: Parallel(n_jobs=n_jobs, prefer="threads")
+        self._parallel = Parallel(n_jobs=params.n_jobs, backend=params.backend)
 
     def run(self, **dependencies: Any) -> Any:
-        """
-        Run the Step by specifying all direct dependencies in the graph as keyword arguments. The direct dependencies
-        are the original arguments, but might be aliased.
+        """Run the Step by specifying all direct dependencies in the graph as keyword arguments.
+
+        The direct dependencies are the original arguments, but might be aliased.
 
         Parameters
         ----------
@@ -108,10 +106,11 @@ class Step:
         Any
             The result of calling the original function with the given dependencies as arguments.
         """
+        # make sure that the passed dependencies contain all direct predecessors in the graph
         direct_dependencies = list(self._task._graph.predecessors(self.name))  # type: ignore[reportPrivateUsage]
-        assert set(dependencies) == set(
-            direct_dependencies
-        ), f"Resolved direct dependencies to be '{direct_dependencies}', but the passed dependencies were '{dependencies}'."
+        assert (d := set(dependencies)) == (
+            i := set(direct_dependencies)
+        ), f"Resolved direct dependencies to be '{i}', but the passed dependencies were '{d}'."
 
         kind, arg = self.kind, self._parameters.map
         if kind == StepKind.FUNCTION:
@@ -122,7 +121,7 @@ class Step:
             assert arg in dependencies, f"'map' argument '{arg}' not found in the dependencies: '{dependencies}'."
             logger.debug(f"Determined kind {kind}, mappping over argument {arg}")
             data = dependencies[arg]
-            iterable, mappable, mappable_and_mutable = is_iterable(data), is_mapping(data), is_mutable_mapping(data)
+            iterable, mappable = is_iterable(data), is_mapping(data)
             assert iterable, f"Data for 'map' argument '{arg}' must be iterable, but found '{data}'"
             if kind == StepKind.MAP_KEYS or kind == StepKind.MAP_ITEMS:
                 assert mappable, f"Data for 'map' argument '{arg}' must be mappable, but found '{data}'"
@@ -131,55 +130,45 @@ class Step:
             logger.debug(f"Converted data '{data}' to mapping '{mapping}'.")
             del dependencies[arg]  # remove the raw mapping data from the dependencies
             mappable_fn = map_fn(self.function, kind)
-            result = self._parallel()(delayed(mappable_fn)(arg, mk, mv, **dependencies) for mk, mv in mapping)
-
-            if mappable_and_mutable:
-                # if the mappable is also mutable, we mutate the original mapping, which might be a custom mappable
-                for k, v in result:
-                    data[k] = v
-            elif mappable:
-                # if the mappable is not mutable, we return a dictionary by default
-                warn(f"Mapping over non-mutable mapping type '{type(data)}', returning dictionary result.")
-                data = dict(result)
-            else:
-                # if the input is not mappable, we return a generator of the results
-                data = (value for _, value in result)
+            result = self._parallel(delayed(mappable_fn)(arg, mk, mv, **dependencies) for mk, mv in mapping)
+            return flat_map_result(mappable, result) if self._parameters.flatten else map_result(mappable, result)
 
         return data
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        pos, kw, pos_only = (set(x) for x in [self.args.positional, self.args.keyword, self.args.positional_only])
+        pos, kw, pos_only = (self.args.positional, self.args.keyword, self.args.positional_only)
         logger.debug(f"Determined '{pos}' as pos, '{kw}' as kw-only and '{pos_only}' as pos-only arguments.")
 
         # note: a keyword argument can never appear before a positional argument, thus, checking if there are more
         # positional arguments than keyword arguments ensures that no keyword arguments are invoked positionally
         if len(args) > len(pos):
-            raise InvalidStepArgumentException(
-                f"Step takes {len(pos)} positional arguments, but {len(args)} positional arguments were given."
+            raise InvalidStepArgumentError(
+                f"Step takes {len(pos)} positional arguments, but {len(args)} positional arguments were given.",
             )
 
-        if len(nonexistant_kw := set(kwargs).difference(pos.union(kw))) > 0:
-            raise InvalidStepArgumentException(f"Step got unexpected keyword arguments: '{nonexistant_kw}'")
+        if len(nonexistant_kw := set(kwargs).difference(set(pos).union(kw))) > 0:
+            raise InvalidStepArgumentError(f"Step got unexpected keyword arguments: '{nonexistant_kw}'")
 
-        if len(pos_only_kw := pos_only.intersection(kwargs)) > 0:
-            raise InvalidStepArgumentException(
-                f"Step got positional-only arguments passed as keyword arguments: '{pos_only_kw}'."
+        if len(pos_only_kw := set(pos_only).intersection(kwargs)) > 0:
+            raise InvalidStepArgumentError(
+                f"Step got positional-only arguments passed as keyword arguments: '{pos_only_kw}'.",
             )
 
         def maybe_alias(name: str) -> str:
-            """Return the name if not aliased, otherwise the aliased name."""
+            # Return the name if not aliased
             if self._parameters.alias is not None and name in self._parameters.alias:
                 return self._parameters.alias[name]
-            else:
-                return name
+
+            # return the aliased name
+            return name
 
         # prepare args and kwargs as replacements
         args_aliased = dict(zip(map(maybe_alias, pos), args))
         kwargs_aliased = {maybe_alias(k): v for k, v in kwargs.items()}
 
         if len(pos_and_kw := set(args_aliased).intersection(kwargs_aliased)) > 0:
-            raise InvalidStepArgumentException(
-                f"Step got duplicate arguments '{pos_and_kw}' as positional and keyword arguments."
+            raise InvalidStepArgumentError(
+                f"Step got duplicate arguments '{pos_and_kw}' as positional and keyword arguments.",
             )
 
         dependencies = {k: v for k, v in self._task.get(drop_last=True, **args_aliased, **kwargs_aliased).items()}
@@ -187,7 +176,7 @@ class Step:
 
         return self.run(**dependencies)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Step{self.signature}\n - Identifier: '{self.name}'\n - Parameters: {self._parameters}"
 
 
@@ -195,20 +184,21 @@ def determine_step_kind(map_arg: str | None, map_type: MapTypeT) -> StepKind:
     """Based on ``map`` and ``map_type`` determine the type of the node."""
     if map_arg is None:
         return StepKind.FUNCTION
-    elif map_type == "keys":
+    if map_type == "keys":
         return StepKind.MAP_KEYS
-    elif map_type == "values":
+    if map_type == "values":
         return StepKind.MAP_VALUES
-    elif map_type == "items":
+    if map_type == "items":
         return StepKind.MAP_ITEMS
-    else:
-        raise AssertionError(f"The parameter 'map_type' must be one of '{get_args(MapTypeT)}' but found '{map_type}'")
+
+    raise AssertionError(f"The parameter 'map_type' must be one of '{get_args(MapTypeT)}' but found '{map_type}'")
 
 
 def map_fn(fn: StepFnT, kind: StepKind) -> MapFnT:
-    """
-    Turn a function of variable keyword argument dependencies into a mapped function additionally accepting a
-    mapping key ``key``, mapping value ``value`` and the original keyword parameter ``name``.
+    """Turn a function of variable keyword argument dependencies into a mapped function.
+
+    The mapped function additionally accepts a mapping key ``key``, mapping value ``value`` and the original keyword
+    parameter ``name``.
 
     Parameters
     ----------
@@ -241,8 +231,7 @@ def map_fn(fn: StepFnT, kind: StepKind) -> MapFnT:
 
 
 def map_data(data: Mapping[Hashable, Any] | Iterable[Any], mappable: bool, iterable: bool) -> MapArgsT:
-    """
-    Ensure that the arg is mappable and convert to mapping of map keys to argument dictionaries.
+    """Ensure that the arg is mappable and convert to mapping of map keys to argument dictionaries.
 
     The mapping data is transformed from ``{"key": {"map_key1": 1, "map_key2": 2, ...}}`` to
     ``[(key, map_key1, 1), (key, map_key_2, 2), ...]``. If the map edge is not a mappable, but an iterable input,
@@ -276,3 +265,21 @@ def map_data(data: Mapping[Hashable, Any] | Iterable[Any], mappable: bool, itera
     else:  # this should not happen, because ``is_iterable`` is already checked before ``map_data`` is called
         raise AssertionError(f"Parameter 'map' requires an iterable input argument, but found {data}")
     return result
+
+
+def map_result(mappable: bool, result: Iterable[tuple[Hashable, Any]]) -> dict[Hashable, Any] | list[Any]:
+    if mappable:
+        # if the input is mappable, we return a dictionary of the results
+        return dict(result)
+
+    # if the input is not mappable, we return a list of the values disregarding the keys
+    return [value for _, value in result]
+
+
+def flat_map_result(mappable: bool, result: Iterable[tuple[Hashable, Any]]) -> dict[Hashable, Any] | list[Any]:
+    if mappable:
+        # if the input is mappable, we return a flattened dictionary of the results
+        return {k: sub for _, value in result for k, sub in value}
+
+    # if the input is not mappable, we return a flattened list of the results
+    return [sub for _, value in result for sub in value]

@@ -1,7 +1,5 @@
-"""
-Definition of a `Task` and `step`.
-"""
-from typing import Any, Optional, Union, cast, overload
+"""Definition of a `Task` and `step`."""
+from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Iterable, Mapping
@@ -9,6 +7,7 @@ from copy import copy
 from dataclasses import asdict
 from logging import getLogger
 from sys import maxsize
+from typing import Any, cast, overload
 from warnings import warn
 
 import networkx as nx
@@ -28,41 +27,47 @@ __all__ = ["Task", "step"]
 def step(
     fn: DecorableT,
     *,
-    map: Optional[str] = None,
+    map: str | None = None,
     map_type: MapTypeT = "values",
-    rename: Optional[str] = None,
-    args: Optional[Union[str, Iterable[str]]] = None,
-    kwargs: Optional[Union[str, Iterable[str]]] = None,
-    alias: Optional[Mapping[str, str]] = None,
+    flatten: bool = False,
+    rename: str | None = None,
+    args: str | Iterable[str] | None = None,
+    kwargs: str | Iterable[str] | None = None,
+    alias: Mapping[str, str] | None = None,
+    n_jobs: int = 1,
 ) -> DecorableT:
-    """Step invoked with a `fn`, returns the `fn`"""
+    """Step invoked with a `fn`, returns the `fn`."""
     ...
 
 
 @overload
 def step(
     *,
-    map: Optional[str] = None,
+    map: str | None = None,
     map_type: MapTypeT = "values",
-    rename: Optional[str] = None,
-    args: Optional[Union[str, Iterable[str]]] = None,
-    kwargs: Optional[Union[str, Iterable[str]]] = None,
-    alias: Optional[Mapping[str, str]] = None,
+    flatten: bool = False,
+    rename: str | None = None,
+    args: str | Iterable[str] | None = None,
+    kwargs: str | Iterable[str] | None = None,
+    alias: Mapping[str, str] | None = None,
+    n_jobs: int = 1,
 ) -> Callable[[DecorableT], DecorableT]:
-    """Step invoked without a `fn`, return a decorator"""
+    """Step invoked without a `fn`, return a decorator."""
     ...
 
 
 def step(
-    fn: Optional[DecorableT] = None,
+    fn: DecorableT | None = None,
     *,
-    map: Optional[str] = None,
+    map: str | None = None,
     map_type: MapTypeT = "values",
-    rename: Optional[str] = None,
-    args: Optional[Union[str, Iterable[str]]] = None,
-    kwargs: Optional[Union[str, Iterable[str]]] = None,
-    alias: Optional[Mapping[str, str]] = None,
-) -> Union[DecorableT, Callable[[DecorableT], DecorableT]]:
+    flatten: bool = False,
+    rename: str | None = None,
+    args: str | Iterable[str] | None = None,
+    kwargs: str | Iterable[str] | None = None,
+    alias: Mapping[str, str] | None = None,
+    n_jobs: int = 1,
+) -> DecorableT | Callable[[DecorableT], DecorableT]:
     """A method decorator (or decorator factory) to add steps to the graph of a class inheriting from `Task`.
 
     Parameters
@@ -79,6 +84,9 @@ def step(
         ``{fn(key1): value1, fn(key2): value2, ...}``, ``"values"`` resulting in
         ``{key1: fn(value1), key2: fn(value2), ...}`` or ``"items"`` resulting in
         ``{fn((key1, value1), fn(key2, value2), ...}``.
+    flatten: bool
+        Flatten mapping edges, useful for otherwise nested results. This option corresponds to the ``chain`` or
+        ``flatMap`` operation commonly found in functional programming languages.
     rename: optional str
         Rename the node in the graph created with ``fn``, the default node name is ``fn.__name__``. For lambda
         functions, the ``fn.__name__`` is always ``<lambda>``, for example. Because node names have to be unique
@@ -95,6 +103,8 @@ def step(
         Rename arguments according to an ``{original: renamed}`` mapping. Aliasing happens after ``*args`` and
         ``*kwargs`` have been injected, because ``*args`` and ``**kwargs`` are unique and the name of both arguments
         is not processed further.
+    n_jobs: int
+        Number of processing jobs to launch for the mapped edge. If there is no mapped edge, this has no effect.
 
     Returns
     -------
@@ -106,20 +116,29 @@ def step(
         setattr(
             fn,
             STEP_ATTRIBUTE,
-            StepParams(map=map, map_type=map_type, rename=rename, args=args, kwargs=kwargs, alias=alias),
+            StepParams(
+                map=map,
+                map_type=map_type,
+                flatten=flatten,
+                rename=rename,
+                args=args,
+                kwargs=kwargs,
+                alias=alias,
+                n_jobs=n_jobs,
+            ),
         )
         return fn
 
     if callable(fn):
         # use `step` directly as a decorator (return the decorated fn)
         return decorator(fn)
-    else:
-        # use `step` as a decorator factory (return a decorator)
-        return decorator
+
+    # use `step` as a decorator factory (return a decorator)
+    return decorator
 
 
 class TaskMeta(type):
-    """A metaclass to enable classes inheriting from `Task` to decorate methods using `@step`
+    """A metaclass to enable classes inheriting from `Task` to decorate methods using `@step`.
 
     Decorating a method using ``@step`` sets a ``STEP_ATTRIBUTE`` on the decorated method containing ``kwargs`` to
     ``@step`` for the method. On ``__init__`` of a class inheriting from ``Task``, the metaclass iterates over all
@@ -127,8 +146,8 @@ class TaskMeta(type):
     https://stackoverflow.com/questions/16017397/injecting-function-call-after-init-with-decorator
     """
 
-    def __call__(cls, *args: Any, **kwargs: Any):
-        """Called when you call Task()"""
+    def __call__(cls, *args: Any, **kwargs: Any) -> Task:
+        """Called when you call Task()."""
         obj = type.__call__(cls, *args, **kwargs)
 
         # iterate over all the attribute names of the newly created object
@@ -146,56 +165,62 @@ class TaskMeta(type):
 class Task(metaclass=TaskMeta):
     """A Task consists of steps that are implicitly modeled as a directed, acyclic graph (DAG)."""
 
-    def __init__(self, n_jobs: int = 1) -> None:
+    def __init__(self, n_jobs: int = 1, backend: str = "threading") -> None:
         super().__init__()
-        # public attributes
-        self.n_jobs = n_jobs
-
         # private attributes
         self._graph = nx.DiGraph()
-        self._parallel = lambda: Parallel(n_jobs=n_jobs, prefer="threads")
+        self._parallel = Parallel(n_jobs=n_jobs, backend=backend)
 
     @overload
     def step(
         self,
         fn: DecorableT,
         *,
-        map: Optional[str] = None,
+        map: str | None = None,
         map_type: MapTypeT = "values",
-        rename: Optional[str] = None,
-        args: Optional[Union[str, Iterable[str]]] = None,
-        kwargs: Optional[Union[str, Iterable[str]]] = None,
-        alias: Optional[Mapping[str, str]] = None,
+        flatten: bool = False,
+        rename: str | None = None,
+        args: str | Iterable[str] | None = None,
+        kwargs: str | Iterable[str] | None = None,
+        alias: Mapping[str, str] | None = None,
+        n_jobs: int = 1,
+        backend: str = "threading",
     ) -> Step:
-        """Step invoked with a `fn`, returns the `fn`"""
+        """Step invoked with a `fn`, returns the `fn`."""
         ...
 
     @overload
     def step(
         self,
         *,
-        map: Optional[str] = None,
+        map: str | None = None,
         map_type: MapTypeT = "values",
-        rename: Optional[str] = None,
-        args: Optional[Union[str, Iterable[str]]] = None,
-        kwargs: Optional[Union[str, Iterable[str]]] = None,
-        alias: Optional[Mapping[str, str]] = None,
+        flatten: bool = False,
+        rename: str | None = None,
+        args: str | Iterable[str] | None = None,
+        kwargs: str | Iterable[str] | None = None,
+        alias: Mapping[str, str] | None = None,
+        n_jobs: int = 1,
+        backend: str = "threading",
     ) -> Callable[[DecorableT], Step]:
-        """Step invoked without a `fn`, return a decorator"""
+        """Step invoked without a `fn`, return a decorator."""
         ...
 
     def step(
         self,
-        fn: Optional[DecorableT] = None,
+        fn: DecorableT | None = None,
         *,
-        map: Optional[str] = None,
+        map: str | None = None,
         map_type: MapTypeT = "values",
-        rename: Optional[str] = None,
-        args: Optional[Union[str, Iterable[str]]] = None,
-        kwargs: Optional[Union[str, Iterable[str]]] = None,
-        alias: Optional[Mapping[str, str]] = None,
-    ) -> Union[Step, Callable[[DecorableT], Step]]:
-        """A decorator (or decorator factory) to add steps to the graph (documented at :meth:`graphtask.step`)"""
+        flatten: bool = False,
+        rename: str | None = None,
+        args: str | Iterable[str] | None = None,
+        kwargs: str | Iterable[str] | None = None,
+        alias: Mapping[str, str] | None = None,
+        n_jobs: int = 1,
+        backend: str = "threading",
+    ) -> Step | Callable[[DecorableT], Step]:
+        """A decorator (or decorator factory) to add steps to the graph (documented at :meth:`graphtask.step`)."""
 
         def decorator(fn: DecorableT) -> Step:
             params = get_function_params(fn)
@@ -211,8 +236,10 @@ class Task(metaclass=TaskMeta):
             step_name = fn.__name__ if rename is None else rename
 
             def fn_processed(**passed: Any) -> Any:
-                """A closure function, that re-arranges the passed keyword arguments into positional-only, variable
-                positional and keyword arguments such that the signature of the original `fn` is respected.
+                """A closure function, that re-arranges the passed keyword arguments.
+
+                The arguments are transformed into positional-only, variable positional and keyword arguments such that
+                the signature of the original `fn` is respected.
 
                 Parameters
                 ----------
@@ -250,7 +277,17 @@ class Task(metaclass=TaskMeta):
                 args=step_args,
                 signature=inspect.signature(fn),
                 task=self[step_name],
-                params=StepParams(map=map, map_type=map_type, rename=rename, args=args, kwargs=kwargs, alias=alias),
+                params=StepParams(
+                    map=map,
+                    map_type=map_type,
+                    flatten=flatten,
+                    rename=rename,
+                    args=args,
+                    kwargs=kwargs,
+                    alias=alias,
+                    n_jobs=n_jobs,
+                    backend=backend,
+                ),
             )
 
             # add the step to the node
@@ -263,9 +300,9 @@ class Task(metaclass=TaskMeta):
         if callable(fn):
             # use `step` directly as a decorator (return the decorated fn)
             return decorator(fn)
-        else:
-            # use `step` as a decorator factory (return a decorator)
-            return decorator
+
+        # use `step` as a decorator factory (return a decorator)
+        return decorator
 
     def register(self, **kwargs: Any) -> None:
         """Register all keyword arguments with `key` and `value` as a node with identifier `key` on the graph.
@@ -282,20 +319,21 @@ class Task(metaclass=TaskMeta):
                 key not in self._graph.nodes or len(p := list(self._graph.predecessors(key))) == 0
             ), f"Cannot register existing node with predecessors '{p}' without predecessors."
             logger.debug(f"Registering node {key}")
-            fn: StepFnT = (lambda v=value: lambda: v)()  # type: ignore[reportUnknownLambdaType]
+            fn: StepFnT = (lambda v=value: lambda: v)()  # type: ignore[reportUnknownLambdaType] # noqa[PLC3002]
             self._graph.add_node(
-                key, **{STEP_ATTRIBUTE: Step(name=key, fn=fn, signature=inspect.signature(fn), task=self)}
+                key,
+                **{STEP_ATTRIBUTE: Step(name=key, fn=fn, signature=inspect.signature(fn), task=self)},
             )
 
-    def get(self, drop_last: bool = False, include_all: bool = False, **replacements: Any) -> dict[str, Any]:
+    def get(self, drop_last: bool = False, last_only: bool = True, **replacements: Any) -> dict[str, Any]:
         """Run the full task if no `node` is given, otherwise run up until `node`.
 
         Parameters
         ----------
         drop_last: bool
             Remove the last topological generation from further processing.
-        include_all: bool
-            Return all graph elements as a dictionary of node names to retrieved values in the graph.
+        last_only: bool
+            Only return the last generation if ``True``, otherwise return all.
         **replacements: Any
             Replace specific ``nodes`` in the graph without invoking the replaced nodes.
 
@@ -316,18 +354,20 @@ class Task(metaclass=TaskMeta):
         verify(is_dag, self._graph)  # this assertion should always hold, except the user messes with `_graph`
 
         # identify the topological generations, which can be parallelized
-        gens = topological_generations(self._graph)[:-1] if drop_last else topological_generations(self._graph)
+        gens = topological_generations(self._graph)
+        gens_without_last, last_gen = gens[:-1], gens[-1]
 
         dependencies: dict[str, Any] = {}
-        last_dependencies: dict[str, Any] = {}
-        for generation in gens:
-            result = self._parallel()(delayed(self._run_step)(node, replacements, dependencies) for node in generation)
-            last_dependencies = dict(zip(generation, result))
-            dependencies = dependencies | last_dependencies
+        for generation in gens_without_last if drop_last else gens:
+            result = self._parallel(delayed(self._run_step)(node, replacements, dependencies) for node in generation)
+            dependencies = dependencies | dict(zip(generation, result))
 
-        return dependencies if include_all else last_dependencies
+        logger.debug(f"Last generation: {last_gen}.")
+        last_dependencies = set(*(list(self._graph.predecessors(n)) for n in last_gen)) if drop_last else last_gen
+        logger.debug(f"Direct dependencies: {last_dependencies}")
+        return {k: v for k, v in dependencies.items() if k in last_dependencies} if last_only else dependencies
 
-    def show(self):
+    def show(self) -> Any:
         from graphtask._visualize import to_pygraphviz
 
         return to_pygraphviz(self)
@@ -357,23 +397,21 @@ class Task(metaclass=TaskMeta):
         logger.debug(f"Current node:         {repr(node)}")
         assert STEP_ATTRIBUTE in current_node, f"Node '{node}' not defined, but set as a dependency."
         step = current_node[STEP_ATTRIBUTE]
-        logger.debug(f"Current step:         {repr(step)}")
         direct_predecessors = list(self._graph.predecessors(node))
         direct_dependencies = {k: v for k, v in dependencies.items() if k in direct_predecessors}
         assert len(direct_predecessors) == len(
-            direct_dependencies
+            direct_dependencies,
         ), f"Not all dependencies defined for direct predecessors '{direct_predecessors}' of node '{node}'"
         return step.run(**direct_dependencies)
 
-    def __getitem__(self, item: str):
+    def __getitem__(self, item: str) -> Task:
         assert item in self._graph.nodes, f"Attempted to retrieve node '{item}', but it was not found in the graph."
         view = copy(self)
-        view._graph = nx.induced_subgraph(self._graph, [item] + bfs_predecessors(view._graph, item))
+        view._graph = nx.induced_subgraph(self._graph, [item, *bfs_predecessors(view._graph, item)])
         return view
 
     def __call__(self, **replacements: Any) -> Any:
-        """
-        Run the task and return the topologically last value (if there is one last node), or a tuple of last values.
+        """Run the task and return the topologically last value (if there is one last node), or a tuple of last values.
 
         Parameters
         ----------
@@ -391,7 +429,7 @@ class Task(metaclass=TaskMeta):
         return result[0] if len(result) == 1 else result
 
     def __str__(self) -> str:
-        return f"Task(n_jobs={self.n_jobs})"
+        return f"Task(n_jobs={self._parallel.n_jobs}, backend={self._parallel._backend.__class__.__name__})"
 
     def __repr__(self) -> str:
         graph = self._graph
@@ -439,8 +477,8 @@ def process_positional_args(passed: dict[str, Any], pos_args: list[str]) -> list
 
 def determine_step_arguments(
     params: list[inspect.Parameter],
-    args: Optional[Union[str, Iterable[str]]],
-    kwargs: Optional[Union[str, Iterable[str]]],
+    args: str | Iterable[str] | None,
+    kwargs: str | Iterable[str] | None,
 ) -> StepArgs:
     """Split positional and keyword arguments from `params`.
 
@@ -461,7 +499,7 @@ def determine_step_arguments(
     StepArgs:
         Classification of positional, keyword and positional-only arguments.
     """
-    param_names: list[Union[str, list[str]]] = []
+    param_names: list[str | list[str]] = []
     param_kinds: list[inspect._ParameterKind] = []  # type:ignore[reportPrivateUsage]
     pos_only_names: list[str] = []
     has_var_arg = False
@@ -507,7 +545,7 @@ def determine_step_arguments(
     if has_var_arg and has_var_kwarg:
         duplicates = [arg for arg in cast(list[str], args) if arg in cast(list[str], kwargs)]
         assert not any(
-            duplicates
+            duplicates,
         ), f"There cannot be duplicate names provided to 'args' and 'kwargs', but found duplicates: '{duplicates}."
 
     if args is not None and not has_var_arg:
@@ -524,8 +562,8 @@ def determine_step_arguments(
     return StepArgs(positional=pos_names, keyword=kw_names, positional_only=pos_only)
 
 
-def flatten_names(ls: list[Union[str, list[str]]]) -> list[str]:
-    """Flatten a list of possible nested strings, such that ['ab', ['c', 'd']] becomes ['ab', 'c', 'd']"""
+def flatten_names(ls: list[str | list[str]]) -> list[str]:
+    """Flatten a list of possible nested strings, such that ['ab', ['c', 'd']] becomes ['ab', 'c', 'd']."""
     result: list[str] = []
     for item in ls:
         if isinstance(item, list):
@@ -537,7 +575,7 @@ def flatten_names(ls: list[Union[str, list[str]]]) -> list[str]:
 
 
 def first_keyword_idx(param_kinds: list[inspect._ParameterKind]) -> int:  # type: ignore[reportPrivateUsage]
-    """Return the first idx of an argument that can only be specified as a keyword or otherwise a very large integer"""
+    """Return the first idx of an argument that can only be specified as a keyword or otherwise a very large integer."""
     var_pos = inspect.Parameter.VAR_POSITIONAL
     kw_only = inspect.Parameter.KEYWORD_ONLY
     var_kw = inspect.Parameter.VAR_KEYWORD
@@ -559,7 +597,7 @@ def first_keyword_idx(param_kinds: list[inspect._ParameterKind]) -> int:  # type
     return min(var_pos_idx, kw_only_idx, var_kw_idx)
 
 
-def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) -> None:
+def alias_step_parameters(params: set[str], alias: Mapping[str, str] | None) -> None:
     """Rename function parameters to use a given alias."""
     if alias is not None:
         for original_name, replacement_name in alias.items():
@@ -570,15 +608,15 @@ def alias_step_parameters(params: set[str], alias: Optional[Mapping[str, str]]) 
                 warn(f"Found alias '{original_name}', but '{original_name}' is not in the arguments.")
 
 
-def invert_alias_step_parameters(params: dict[str, Any], alias: Optional[Mapping[str, str]]) -> None:
+def invert_alias_step_parameters(params: dict[str, Any], alias: Mapping[str, str] | None) -> None:
     """Undo renaming of function parameters, i.e. for the passed `params` change the aliased keys to original keys."""
     inverse_alias = {v: k for k, v in alias.items()} if alias is not None else {}
-    keys_to_rename = (key for key in inverse_alias.keys() if key in params)
+    keys_to_rename = (key for key in inverse_alias if key in params)
     for key in keys_to_rename:
         params[inverse_alias[key]] = params.pop(key)
 
 
-def verify_map_parameter(params: set[str], map: Optional[str]) -> None:
+def verify_map_parameter(params: set[str], map: str | None) -> None:
     """Ensure that given `split` and `map` are in the (final) parameter set."""
     if map is not None:
         assert map in params, (
@@ -593,19 +631,19 @@ def get_function_params(fn: Callable[..., Any]) -> list[inspect.Parameter]:
 
 
 def bfs_successors(graph: nx.DiGraph, node: str) -> list[str]:  # pragma: no cover (currently not used)
-    """The names of all successors to `node`"""
+    """The names of all successors to `node`."""
     result: list[str] = list(nx.bfs_tree(graph, node))[1:]
     return result
 
 
 def bfs_predecessors(graph: nx.DiGraph, node: str) -> list[str]:  # pragma: no cover (currently not used)
-    """The names of all predecessors to `node`"""
+    """The names of all predecessors to `node`."""
     result: list[str] = list(nx.bfs_tree(graph.reverse(copy=False), node))[1:]
     return result
 
 
 def topological_successors(graph: nx.DiGraph, node: str) -> list[list[str]]:
-    """The names of all invalidated nodes (grouped in generations) if `node` changed"""
+    """The names of all invalidated nodes (grouped in generations) if `node` changed."""
     bfs_tree = nx.bfs_tree(graph, node)
     subgraph = nx.induced_subgraph(graph, bfs_tree.nodes)
     generations = nx.topological_generations(subgraph)
@@ -613,11 +651,11 @@ def topological_successors(graph: nx.DiGraph, node: str) -> list[list[str]]:
 
 
 def topological_predecessors(graph: nx.DiGraph, node: str) -> list[list[str]]:
-    """The names of all dependency nodes (grouped in generations) for `node`"""
+    """The names of all dependency nodes (grouped in generations) for `node`."""
     generations = topological_successors(graph.reverse(copy=False), node)
     return list(reversed(generations))
 
 
 def topological_generations(graph: nx.DiGraph) -> list[list[str]]:
-    """The names of all nodes in the graph grouped into generations"""
+    """The names of all nodes in the graph grouped into generations."""
     return list(nx.topological_generations(graph))

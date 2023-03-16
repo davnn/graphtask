@@ -1,9 +1,6 @@
-"""
-Generic checks and assertions.
-"""
-from typing import Any, Callable
-
-from collections.abc import Mapping
+"""Generic checks and assertions."""
+from collections.abc import Callable, Mapping
+from typing import Any
 
 import networkx as nx
 
@@ -28,13 +25,13 @@ def is_iterable(iterable: Any) -> bool:
     """
     try:
         iter(iterable)
-        return True
-    except Exception:
+        return True  # noqa[TRY300]
+    except Exception:  # noqa[BLE001]
         return False
 
 
 def is_mutable_mapping(mapping: Any) -> bool:
-    """Check if given `mapping` is a mutable mapping type, which it is, if it is a mapping with ``__setitem__``
+    """Check if given `mapping` is a mutable mapping type, which it is, if it is a mapping with ``__setitem__``.
 
     Parameters
     ----------
@@ -52,7 +49,7 @@ def is_mutable_mapping(mapping: Any) -> bool:
 
 
 def is_mapping(mapping: Any) -> bool:
-    """Check if given `mapping` is a mapping type, which it is, if it is an instance of ``Mapping``
+    """Check if given `mapping` is a mapping type, which it is, if it is an instance of ``Mapping``.
 
     Parameters
     ----------
@@ -72,7 +69,7 @@ def is_dag(graph: nx.DiGraph) -> bool:
     return nx.is_directed_acyclic_graph(graph)
 
 
-def verify(predicate: Callable[..., bool], *args: Any, **kwargs: Any):
+def verify(predicate: Callable[..., bool], *args: Any, **kwargs: Any) -> None:
     """Assert that a predicate function (bool return) holds given ``*args`` and ``**kwargs``.
 
     Parameters
