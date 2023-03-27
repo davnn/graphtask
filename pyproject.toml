@@ -57,7 +57,7 @@ bandit = "^1.7.4"
 safety = "^2.3.1"
 
 [tool.poetry.group.lint.dependencies]
-pre-commit = "^2.20.0"
+pre-commit = "^3.2.1"
 pydocstyle = "^6.1.1"
 pylint = "^2.15.4"
 pyupgrade = "^3.1.0"
