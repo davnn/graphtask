@@ -13,16 +13,13 @@ Let's create a stacking model with scikit-learn.
 
 import numpy as np
 from matplotlib import pyplot as plt
-from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.datasets import make_blobs
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.utils.multiclass import check_classification_targets
-from sklearn.utils.validation import check_is_fitted
 
-from graphtask import Task, step
+from graphtask import Task
 
 # %%
 # A minimal stacking task

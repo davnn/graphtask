@@ -1,8 +1,9 @@
 #* Variables
 SHELL := /usr/bin/env bash
-PYTHON := python3
+PYTHON := python
 PYTHONPATH := `pwd`
 PROJECT := graphtask
+CONDA := micromamba
 
 #* Poetry installation
 .PHONY: poetry-install
@@ -13,19 +14,27 @@ poetry-install:
 poetry-remove:
 	curl -sSL https://install.python-poetry.org | $(PYTHON) - --uninstall
 
-#* Conda installation
-.PHONY: conda-env-create
-conda-env-create:
-	conda create --yes --name $(PROJECT) python=3.9
+#* Python environment
+.PHONY: env-create
+env-create:
+	$(CONDA) env create --yes --name $(PROJECT) conda-forge::python=3.10
 
-.PHONY: conda-env-remove
-conda-env-remove:
-	conda env remove --name $(PROJECT)
+.PHONY: env-remove
+env-remove:
+	$(CONDA) env remove --name $(PROJECT)
 
 #* Package installation
+.PHONY: update
+update:
+	poetry update --no-interaction
+
 .PHONY: install
 install:
 	poetry install --all-extras --no-interaction
+
+.PHONY: fix
+fix:
+	$(CONDA) install --yes --freeze-installed conda-forge::pygraphviz=1.11.0
 
 #* Pre-commit
 .PHONY: pre-commit-install
@@ -39,8 +48,7 @@ pre-commit:
 #* Formatting
 .PHONY: format
 format:
-	poetry run pyupgrade --exit-zero-even-if-changed --py39-plus $(PROJECT)/**.py
-	poetry run isort --settings-path pyproject.toml $(PROJECT)
+	poetry run ruff check $(PROJECT) --fix
 	poetry run black --config pyproject.toml $(PROJECT)
 
 #* Testing
@@ -52,9 +60,8 @@ test:
 #* Linting
 .PHONY: codestyle
 codestyle:
-	poetry run isort --diff --check-only --settings-path pyproject.toml $(PROJECT)
+	poetry run ruff check $(PROJECT)
 	poetry run black --diff --check --config pyproject.toml $(PROJECT)
-	poetry run darglint --verbosity 2 $(PROJECT) tests
 
 .PHONY: pyright
 pyright:
@@ -62,9 +69,8 @@ pyright:
 
 .PHONY: safety
 safety:
-	poetry check
 	poetry run safety check --full-report
-	poetry run bandit -ll --recursive $(PROJECT) tests
+	poetry run bandit -ll --recursive $(PROJECT) $(TESTS)
 
 .PHONY: lint
 lint: codestyle pyright safety
