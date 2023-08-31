@@ -17,7 +17,6 @@ from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_is_fitted
 
 from graphtask import Task, step
-from graphtask.visualize import to_pygraphviz
 
 
 # %%
@@ -49,7 +48,7 @@ class BaggingClassifier(BaseEstimator, ClassifierMixin, Task):
         self.classes_, y = np.unique(y, return_inverse=True)
         self.n_classes_ = len(self.classes_)
         self.register(X_fit=X, y_fit=y)
-        self.run("_fit_estimator")
+        self._fit_estimator()
         return self
 
     def fit_predict(self, X, y):
@@ -63,7 +62,7 @@ class BaggingClassifier(BaseEstimator, ClassifierMixin, Task):
     def predict_proba(self, X):
         check_is_fitted(self)
         self.register(X_pred=X)
-        bootstrap_probabilities = self.run("_predict_estimator")
+        bootstrap_probabilities = self._predict_estimator()
         return np.mean(bootstrap_probabilities, axis=0)
 
     @step
@@ -93,7 +92,7 @@ class BaggingClassifier(BaseEstimator, ClassifierMixin, Task):
 # Let us now instantiate the classifier with a k-nearest neighbors model and look at the inferred DAG.
 
 model = BaggingClassifier(base_estimator=KNeighborsClassifier())
-to_pygraphviz(model).draw("model.png")
+model.show().draw("model.png")
 
 # %%
 # Let's run the classifier on some example data.

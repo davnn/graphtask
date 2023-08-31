@@ -5,7 +5,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "graphtask"
-version = "0.0.1"
+version = "0.1.0"
 description = "Build implicit task graphs from functions and process them in parallel."
 readme = "README.md"
 authors = ["David Muhr <muhrdavid+github@gmail.com>"]
@@ -18,80 +18,72 @@ keywords = []
 
 # Pypi classifiers: https://pypi.org/classifiers/
 classifiers = [
-  "Development Status :: 3 - Alpha",
-  "License :: OSI Approved :: MIT License",
-  "Topic :: Software Development :: Libraries",
-  "Topic :: Scientific/Engineering",
-  "Topic :: Utilities",
-  "Intended Audience :: Developers",
-  "Intended Audience :: Science/Research",
-  "Intended Audience :: Education",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3 :: Only",
-  "Operating System :: Microsoft :: Windows",
-  "Operating System :: POSIX",
-  "Operating System :: Unix",
-  "Operating System :: MacOS",
-  "Typing :: Typed"
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Utilities",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Operating System :: Unix",
+    "Operating System :: MacOS",
+    "Typing :: Typed"
 ]
 
 [tool.poetry.dependencies]
 python = "^3.9"
-networkx = { version = "^2.8.7" }
-joblib = { version = "^1.1.1" }
-pygraphviz = { version = "1.10", optional = true }
+networkx = { version = "^3.1" }
+joblib = { version = "^1.3.2" }
+pygraphviz = { version = "1.11", optional = true }
+stackeddag = "^0.3.4"
 
 [tool.poetry.extras]
 visualize = ["pygraphviz"]
 
 [tool.poetry.group.dev.dependencies]
-typing-extensions = "^4.3.0"
-pyright = "^1.1.275"
-notebook = "^6.5.1"
-poethepoet = "^0.16.4"
+ruff = "^0.0.256"
+typing-extensions = "^4.7.1"
+pyright = "^1.1.325"
+notebook = "^7.0.3"
 
 [tool.poetry.group.safety.dependencies]
-bandit = "^1.7.4"
-safety = "^2.3.1"
+bandit = "^1.7.5"
+safety = "^2.3.5"
 
 [tool.poetry.group.lint.dependencies]
-pre-commit = "^2.20.0"
-pydocstyle = "^6.1.1"
-pylint = "^2.15.4"
-pyupgrade = "^3.1.0"
-darglint = "^1.8.1"
-black = "^22.10.0"
-isort = { extras = ["colors"], version = "^5.10.1" }
+pre-commit = "^3.3.3"
+black = "^23.7.0"
 
 [tool.poetry.group.test.dependencies]
-pytest = "^7.1.3"
-pytest-html = "^3.1.1"
-pytest-cov = "^4.0.0"
-coverage = "^6.5.0"
+pytest = "^7.4.0"
+pytest-html = "^3.2.0"
+pytest-cov = "^4.1.0"
+coverage = "^7.3.0"
 coverage-badge = "^1.1.0"
-hypothesis = "^6.56.4"
+hypothesis = "^6.82.7"
 
 [tool.poetry.group.docs.dependencies]
 # https://github.com/sphinx-doc/sphinx
-sphinx = "^5.3.0"
-sphinx-design = "^0.3.0"
-sphinx-gallery = "^0.11.1"
+sphinx = "^7.2.5"
+sphinx-design = "^0.5.0"
+sphinx-gallery = "^0.14"
 sphinx-autobuild = "^2021.3.14"
-sphinx-copybutton = "^0.5.0"
-pydata-sphinx-theme = "^0.11.0"
+sphinx-copybutton = "^0.5.2"
+pydata-sphinx-theme = "^0.13.3"
 numpydoc = "^1.5.0"
 
 [tool.poetry.group.examples.dependencies]
 # https://github.com/sphinx-gallery/sphinx-gallery
-scikit-learn = "^1.1.3"
-pillow = "^9.3.0"
-matplotlib = "^3.6.2"
-numpy = "^1.23.4"
-
-[tool.poe.tasks]
-fix-pygraphviz = "conda install --yes --freeze-installed conda-forge::pygraphviz=1.10.0"
+scikit-learn = "^1.3.0"
+pillow = "^10.0.0"
+matplotlib = "^3.7.2"
+numpy = "^1.25.2"
 
 [tool.black]
 # https://github.com/psf/black
@@ -114,17 +106,50 @@ exclude = '''
 )/
 '''
 
-[tool.isort]
-# https://github.com/timothycrosley/isort/
-py_version = 39
-line_length = 120
-known_typing = ["typing", "types", "typing_extensions"]
-sections = ["FUTURE", "TYPING", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
-include_trailing_comma = true
-profile = "black"
-multi_line_output = 3
-indent = 4
-color_output = true
+[tool.ruff]
+line-length = 120
+select = ["ALL"]
+ignore = [
+    "D203", # one blank line required before class docstring
+    "D213", # multi line summary should start at second line
+    "D401", # docstrings should start with non-imperative mood
+    "E501", # line too long, handled by black
+    "F403", # disallow * import, otherwise allow at module level (F406)
+    "B008", # do not perform function calls in argument defaults
+    "S101", # do not use assert,
+    "PD901", # do not use 'df' as a variable name
+    "PLR0911", # too many return statements
+    "ANN101", # missing type annotations for 'self'
+    "D107", # missing docstring for '__init__'
+    "TCH", # require type checking block
+    "PLR0913", # too many function arguments
+    "ANN401", # dynamically typed expressions
+    "EM101", # must use msg variable for exceptions
+    "TRY003", # long messages
+    "A002", # shadowing builtins
+    "SLF001", # private member access
+    "G004", # f-strings in logging
+    "B905", # zip without strict= parameter
+    "FBT001", # boolean positional argument
+    "FBT002", # boolean default argument
+    "D418", # overload function no docstring
+    "EM102", # no f-string in exceptions
+    "PLR2004", # magic value used (unnamed constant)
+    "PT018", # complex assertions
+    "A003", # shadowing a builtin (we currently shadow 'map', but this should change in the future)
+    "PD011", # .to_numpy() instead of .values (leads to false positives)
+]
+
+[tool.ruff.isort]
+# Combine multiple `from foo import bar as baz` statements with the same source
+# (`foo`) into a single statement.
+combine-as-imports = true
+# Imports of the form `from foo import bar as baz` show one `import bar as baz`
+# per line. Useful for __init__.py files that just re-export symbols.
+force-wrap-aliases = true
+
+[tool.ruff.flake8-quotes]
+docstring-quotes = "double"
 
 [tool.pyright]
 include = ["graphtask", "typings"]
@@ -132,7 +157,7 @@ reportPrivateImportUsage = true
 reportConstantRedefinition = true
 reportDuplicateImport = true
 reportFunctionMemberAccess = true
-reportImportCycles = true
+reportImportCycles = false # we currently use circular imports for typing
 reportIncompatibleMethodOverride = true
 reportIncompatibleVariableOverride = true
 reportIncompleteStub = true
@@ -164,7 +189,7 @@ reportUntypedBaseClass = true
 reportUntypedClassDecorator = true
 reportUntypedFunctionDecorator = true
 reportUntypedNamedTuple = true
-reportCallInDefaultInitializer = true
+reportCallInDefaultInitializer = false
 reportImplicitStringConcatenation = true
 reportMissingSuperCall = true
 reportPropertyTypeMismatch = true

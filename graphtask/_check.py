@@ -1,13 +1,10 @@
-"""
-Generic checks and assertions.
-"""
-from typing import Any, Callable
-
-from collections.abc import Mapping
+"""Generic checks and assertions."""
+from collections.abc import Callable, Mapping
+from typing import Any
 
 import networkx as nx
 
-__all__ = ["is_dag", "is_iterable", "is_mapping", "verify"]
+__all__ = ["is_dag", "is_iterable", "is_mapping", "is_mutable_mapping", "verify"]
 
 
 def is_iterable(iterable: Any) -> bool:
@@ -28,13 +25,31 @@ def is_iterable(iterable: Any) -> bool:
     """
     try:
         iter(iterable)
-        return True
-    except Exception:
+        return True  # noqa[TRY300]
+    except Exception:  # noqa[BLE001]
         return False
 
 
+def is_mutable_mapping(mapping: Any) -> bool:
+    """Check if given `mapping` is a mutable mapping type, which it is, if it is a mapping with ``__setitem__``.
+
+    Parameters
+    ----------
+    mapping: Any
+        Any value that may be a mutable mapping.
+
+    Returns
+    -------
+    bool
+        ``True`` if ``mapping`` is a mapping with ``__setitem__``, ``False`` otherwise.
+    """
+    # This seems to be a safer check than ``isinstance(mapping, MutableMapping)``, because we don't require
+    # ``__delitem__``, which is required by ``MutableMapping``.
+    return is_mapping(mapping) and hasattr(mapping, "__setitem__")
+
+
 def is_mapping(mapping: Any) -> bool:
-    """Check if given `mapping` is a mapping type, which it is, if it is an instance of `Mapping`
+    """Check if given `mapping` is a mapping type, which it is, if it is an instance of ``Mapping``.
 
     Parameters
     ----------
@@ -54,7 +69,7 @@ def is_dag(graph: nx.DiGraph) -> bool:
     return nx.is_directed_acyclic_graph(graph)
 
 
-def verify(predicate: Callable[..., bool], *args: Any, **kwargs: Any):
+def verify(predicate: Callable[..., bool], *args: Any, **kwargs: Any) -> None:
     """Assert that a predicate function (bool return) holds given ``*args`` and ``**kwargs``.
 
     Parameters

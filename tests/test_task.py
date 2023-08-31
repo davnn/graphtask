@@ -7,8 +7,8 @@ from typing import get_args
 import pytest
 from hypothesis import given
 
-from graphtask import Task
-from graphtask._task import MapTypeT
+from graphtask import Task, step
+from graphtask._globals import MapTypeT
 from tests import *
 
 
@@ -22,7 +22,7 @@ def test_identity(data):
     task = Task()
     task.register(data=data)
     task.step(fn=identity)
-    assert data == task.run()
+    assert data == task()
 
 
 @given(data=dict_of_iterables)
@@ -32,7 +32,7 @@ def test_identity_map_mappable(data, map_type):
     task = Task()
     task.register(data=data)
     task.step(identity, map="data", map_type=map_type)
-    assert data == task.run()
+    assert data == task()
 
 
 @given(data=list_of_iterables)
@@ -41,7 +41,7 @@ def test_identity_map_iterable(data):
     task = Task()
     task.register(data=data)
     task.step(identity, map="data", map_type="values")
-    assert data == task.run()
+    assert data == list(task())
 
 
 @given(n_nodes=int_gt_1_lt_max, data=anything)
@@ -50,7 +50,7 @@ def test_split_nodes(n_nodes, data):
     task.register(data=data)
     for n in range(n_nodes):
         task.step(fn=identity, rename=f"identity_{n}")
-    result = task.run()
+    result = task()
 
     # the number of results should equal the number of leaf nodes
     assert len(result) == n_nodes
@@ -75,7 +75,7 @@ def test_combine_nodes(n_nodes, data):
     task.step(fn=lambda **kwargs: list(kwargs.values()), kwargs=nodes, rename="kwargs")
 
     # Run the task
-    result_args, result_kwargs = task.run()
+    result_args, result_kwargs = task()
 
     # Make sure the output size is as expected
     assert len(result_args) == n_nodes
@@ -96,7 +96,7 @@ def test_string_args_kwargs(data):
     task.register(data=data)
     task.step(lambda *args: args[0], args="data", rename="args")
     task.step(lambda **kwargs: list(kwargs.values())[0], kwargs="data", rename="kwargs")
-    for result in task.run():
+    for result in task():
         assert result == data
 
 
@@ -111,7 +111,7 @@ def test_run_nodes(n_nodes, data):
 
     # each node should return the identity repeated `i` times
     for repeats, node in enumerate(nodes):
-        result = task.run(node)
+        result = task[node]()
         assert len(result) == repeats
         for item in result:
             assert data == item
@@ -122,7 +122,58 @@ def test_aliasing(alias, data):
     task = Task()
     task.register(**{alias: data})
     task.step(fn=identity, alias={"data": alias})
-    assert data == task.run()
+    assert data == task()
+
+
+@given(original_value=basics, replacement=basics)
+def test_node_replacement(original_value, replacement):
+    task = Task()
+    task.register(data=original_value)
+    assert task(data=replacement) == replacement
+
+
+@given(original_value=basics, replacement=basics)
+def test_subgraph_keeps_reference(original_value, replacement):
+    task_fun = Task()
+
+    @task_fun.step
+    def a(data):
+        return data
+
+    @task_fun.step
+    def b(a):
+        return a
+
+    @task_fun.step
+    def c(b):
+        return b
+
+    class T(Task):
+        @step
+        def a(self, data):
+            return data
+
+        @step
+        def b(self, a):
+            return a
+
+        @step
+        def c(self, b):
+            return b
+
+    task_cls = T()
+
+    # the original values should all be the same
+    task_fun.register(data=original_value)
+    task_cls.register(data=original_value)
+    assert original_value == task_fun() == a() == b() == c()
+    assert original_value == task_cls() == task_cls.a() == task_cls.b() == task_cls.c()
+
+    # the replaced values should all be the same
+    task_fun.step(lambda a: replacement, rename="b")
+    task_cls.step(lambda a: replacement, rename="b")
+    assert original_value == a() == task_cls.a() == b() == task_cls.b()
+    assert replacement == task_cls() == task_fun() == c() == task_cls.c()
 
 
 def test_assertions():
@@ -158,7 +209,7 @@ def test_assertions():
         task = Task()
         task.step(fn=fn_args_kwargs, args="x", kwargs="x")
 
-    with pytest.raises(AssertionError, match="Step argument 'map' must refer to one of the parameters"):
+    with pytest.raises(AssertionError, match="Step parameter 'map' must refer to one of the function arguments"):
         task = Task()
         task.step(fn=fn, map="data")
 
@@ -175,37 +226,33 @@ def test_assertions():
     with pytest.raises(AssertionError, match=f"Node 'x' not defined, but set as a dependency."):
         task = Task()
         task.step(fn=fn)
-        task.run()
+        task()
 
-    with pytest.raises(AssertionError, match=f"Parameter 'map' requires an iterable input argument"):
-        task = Task()
-        task.register(x=1)
-        task.step(fn=fn, map="x")
-        task.run()
-
-    with pytest.raises(AssertionError, match=f"Cannot use 'map_type=keys' on non-mappable argument"):
+    with pytest.raises(AssertionError, match=f"Data for 'map' argument 'data' must be mappable"):
+        # mapping over keys is only valid for mappable arguments
         task = Task()
         task.register(data=[1, 2, 3])
         task.step(identity, map="data", map_type="keys")
-        task.run()
+        task()
 
-    with pytest.raises(AssertionError, match=f"Cannot use 'map_type=items' on non-mappable argument"):
+    with pytest.raises(AssertionError, match=f"Data for 'map' argument 'data' must be mappable"):
+        # mapping over items is only valid for mappable arguments
         task = Task()
         task.register(data=[1, 2, 3])
         task.step(identity, map="data", map_type="items")
-        task.run()
+        task()
 
     # run
-    with pytest.raises(AssertionError, match="The 'node' must be in Task"):
+    with pytest.raises(AssertionError, match="Attempted to retrieve node 'missing'"):
         task = Task()
         task.register(data=[1, 2, 3])
-        task.run(node="missing")
+        task["missing"]()
 
     with pytest.raises(AssertionError, match="Cannot verify that predicate 'is_dag' holds"):
         # should only happen if a user messes with the underlying `_graph`, otherwise should already fail in `step`
         task = Task()
         task._graph.add_edges_from([("cyclic", "cyclic")])
-        task.run()
+        task()
 
 
 def test_warnings():
@@ -216,3 +263,7 @@ def test_warnings():
     with pytest.warns(UserWarning, match=escape("Provided 'kwargs' argument for 'step', but no '**kwargs'")):
         task = Task()
         task.step(fn=lambda: None, kwargs=["x"], rename="test")
+
+    with pytest.warns(UserWarning, match=escape("Found alias 'test', but 'test' is not in the arguments.")):
+        task = Task()
+        task.step(fn=lambda: None, alias={"test": "name"})

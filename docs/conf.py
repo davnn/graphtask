@@ -44,7 +44,7 @@ sphinx_gallery_conf = {
         # The module you locally document uses None
         "graphtask": None,
     },
-    "examples_dirs": "../examples",  # path to your example scripts
+    "examples_dirs": "examples",  # path to your example scripts
     "gallery_dirs": "_gallery",  # path to where to save gallery generated output
     "ignore_pattern": "skip_",
     "filename_pattern": "",  # process all files in ``examples``
