@@ -12,10 +12,10 @@ from warnings import warn
 
 import networkx as nx
 from joblib import Parallel, delayed
-from stackeddag.core import edgesToText, mkEdges, mkLabels  # type: ignore[reportUnknownVariableType]
+from stackeddag.core import edgesToText, mkEdges, mkLabels
 
 from graphtask._check import is_dag, verify
-from graphtask._globals import STEP_ATTRIBUTE, DecorableT, MapTypeT
+from graphtask._globals import STEP_ATTRIBUTE, BackendT, DecorableT, MapTypeT
 from graphtask._step import Step, StepArgs, StepFnT, StepParams
 
 logger = getLogger(__name__)
@@ -165,7 +165,7 @@ class TaskMeta(type):
 class Task(metaclass=TaskMeta):
     """A Task consists of steps that are implicitly modeled as a directed, acyclic graph (DAG)."""
 
-    def __init__(self, n_jobs: int = 1, backend: str = "threading") -> None:
+    def __init__(self, n_jobs: int = 1, backend: BackendT = "threading") -> None:
         super().__init__()
         # private attributes
         self._graph = nx.DiGraph()
@@ -184,7 +184,7 @@ class Task(metaclass=TaskMeta):
         kwargs: str | Iterable[str] | None = None,
         alias: Mapping[str, str] | None = None,
         n_jobs: int = 1,
-        backend: str = "threading",
+        backend: BackendT = "threading",
     ) -> Step:
         """Step invoked with a `fn`, returns the `fn`."""
         ...
@@ -201,7 +201,7 @@ class Task(metaclass=TaskMeta):
         kwargs: str | Iterable[str] | None = None,
         alias: Mapping[str, str] | None = None,
         n_jobs: int = 1,
-        backend: str = "threading",
+        backend: BackendT = "threading",
     ) -> Callable[[DecorableT], Step]:
         """Step invoked without a `fn`, return a decorator."""
         ...
@@ -218,7 +218,7 @@ class Task(metaclass=TaskMeta):
         kwargs: str | Iterable[str] | None = None,
         alias: Mapping[str, str] | None = None,
         n_jobs: int = 1,
-        backend: str = "threading",
+        backend: BackendT = "threading",
     ) -> Step | Callable[[DecorableT], Step]:
         """A decorator (or decorator factory) to add steps to the graph (documented at :meth:`graphtask.step`)."""
 
@@ -355,6 +355,11 @@ class Task(metaclass=TaskMeta):
 
         # identify the topological generations, which can be parallelized
         gens = topological_generations(self._graph)
+
+        # if there are no generations, return an empty dictionary
+        if len(gens) == 0:
+            return {}
+
         gens_without_last, last_gen = gens[:-1], gens[-1]
 
         dependencies: dict[str, Any] = {}
@@ -363,7 +368,9 @@ class Task(metaclass=TaskMeta):
             dependencies = dependencies | dict(zip(generation, result))
 
         logger.debug(f"Last generation: {last_gen}.")
-        last_dependencies = set(*(list(self._graph.predecessors(n)) for n in last_gen)) if drop_last else last_gen
+        last_dependencies: list[str] = (
+            list(*(list(self._graph.predecessors(n)) for n in last_gen)) if drop_last else last_gen
+        )
         logger.debug(f"Direct dependencies: {last_dependencies}")
         return {k: v for k, v in dependencies.items() if k in last_dependencies} if last_only else dependencies
 
@@ -429,7 +436,7 @@ class Task(metaclass=TaskMeta):
         return result[0] if len(result) == 1 else result
 
     def __str__(self) -> str:
-        return f"Task(n_jobs={self._parallel.n_jobs}, backend={self._parallel._backend.__class__.__name__})"
+        return f"Task(n_jobs={self._parallel.n_jobs}, backend={self._parallel._backend.__class__.__name__})"  # type: ignore[reportGeneralTypeIssues,reportUnknownMemberType]
 
     def __repr__(self) -> str:
         graph = self._graph

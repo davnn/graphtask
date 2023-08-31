@@ -7,3 +7,4 @@ DecorableT = Callable[..., Any]  # type of ``@step``-decorable values
 ArgsT = dict[str, Any]
 MapArgsT = list[tuple[Hashable, Any]]
 MapTypeT = Literal["keys", "values", "items"]
+BackendT = Literal["threading", "multiprocessing", "loky"]

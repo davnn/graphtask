@@ -1,6 +1,5 @@
 from typing import Any
 
-
 class AGraph:
     graph_attr: dict[str, Any]
     def get_node(self, v: str) -> Node: ...

@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 from joblib import Parallel, delayed
 
 from graphtask._check import is_iterable, is_mapping
-from graphtask._globals import MapArgsT, MapTypeT
+from graphtask._globals import BackendT, MapArgsT, MapTypeT
 
 logger = getLogger(__name__)
 
@@ -46,7 +46,7 @@ class StepParams:
     kwargs: str | Iterable[str] | None = None
     alias: Mapping[str, str] | None = None
     n_jobs: int = 1
-    backend: str = "threading"
+    backend: BackendT = "threading"
 
 
 @dataclass
