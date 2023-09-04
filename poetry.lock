@@ -278,6 +278,7 @@ packaging = ">=22.0"
 pathspec = ">=0.9.0"
 platformdirs = ">=2"
 tomli = {version = ">=1.1.0", markers = "python_version < \"3.11\""}
+typing-extensions = {version = ">=3.10.0.0", markers = "python_version < \"3.10\""}
 
 [package.extras]
 colorama = ["colorama (>=0.4.3)"]
@@ -994,6 +995,43 @@ files = [
 ]
 
 [[package]]
+name = "importlib-metadata"
+version = "6.8.0"
+description = "Read metadata from Python packages"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "importlib_metadata-6.8.0-py3-none-any.whl", hash = "sha256:3ebb78df84a805d7698245025b975d9d67053cd94c79245ba4b3eb694abe68bb"},
+    {file = "importlib_metadata-6.8.0.tar.gz", hash = "sha256:dbace7892d8c0c4ac1ad096662232f831d4e64f4c4545bd53016a3e9d4654743"},
+]
+
+[package.dependencies]
+zipp = ">=0.5"
+
+[package.extras]
+docs = ["furo", "jaraco.packaging (>=9)", "jaraco.tidelift (>=1.4)", "rst.linker (>=1.9)", "sphinx (>=3.5)", "sphinx-lint"]
+perf = ["ipython"]
+testing = ["flufl.flake8", "importlib-resources (>=1.3)", "packaging", "pyfakefs", "pytest (>=6)", "pytest-black (>=0.3.7)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-enabler (>=2.2)", "pytest-mypy (>=0.9.1)", "pytest-perf (>=0.9.2)", "pytest-ruff"]
+
+[[package]]
+name = "importlib-resources"
+version = "6.0.1"
+description = "Read resources from Python packages"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "importlib_resources-6.0.1-py3-none-any.whl", hash = "sha256:134832a506243891221b88b4ae1213327eea96ceb4e407a00d790bb0626f45cf"},
+    {file = "importlib_resources-6.0.1.tar.gz", hash = "sha256:4359457e42708462b9626a04657c6208ad799ceb41e5c58c57ffa0e6a098a5d4"},
+]
+
+[package.dependencies]
+zipp = {version = ">=3.1.0", markers = "python_version < \"3.10\""}
+
+[package.extras]
+docs = ["furo", "jaraco.packaging (>=9.3)", "jaraco.tidelift (>=1.4)", "rst.linker (>=1.9)", "sphinx (>=3.5)", "sphinx-lint"]
+testing = ["pytest (>=6)", "pytest-black (>=0.3.7)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-enabler (>=2.2)", "pytest-mypy (>=0.9.1)", "pytest-ruff"]
+
+[[package]]
 name = "iniconfig"
 version = "2.0.0"
 description = "brain-dead simple config-ini parsing"
@@ -1061,6 +1099,7 @@ prompt-toolkit = ">=3.0.30,<3.0.37 || >3.0.37,<3.1.0"
 pygments = ">=2.4.0"
 stack-data = "*"
 traitlets = ">=5"
+typing-extensions = {version = "*", markers = "python_version < \"3.10\""}
 
 [package.extras]
 all = ["black", "curio", "docrepr", "ipykernel", "ipyparallel", "ipywidgets", "matplotlib", "matplotlib (!=3.2.0)", "nbconvert", "nbformat", "notebook", "numpy (>=1.21)", "pandas", "pytest (<7)", "pytest (<7.1)", "pytest-asyncio", "qtconsole", "setuptools (>=18.5)", "sphinx (>=1.3)", "sphinx-rtd-theme", "stack-data", "testpath", "trio", "typing-extensions"]
@@ -1216,6 +1255,7 @@ files = [
 ]
 
 [package.dependencies]
+importlib-metadata = {version = ">=4.8.3", markers = "python_version < \"3.10\""}
 jupyter-core = ">=4.12,<5.0.dev0 || >=5.1.dev0"
 python-dateutil = ">=2.8.2"
 pyzmq = ">=23.0"
@@ -1283,6 +1323,7 @@ files = [
 ]
 
 [package.dependencies]
+importlib-metadata = {version = ">=4.8.3", markers = "python_version < \"3.10\""}
 jupyter-server = ">=1.1.2"
 
 [[package]]
@@ -1353,6 +1394,7 @@ files = [
 
 [package.dependencies]
 async-lru = ">=1.0.0"
+importlib-metadata = {version = ">=4.8.3", markers = "python_version < \"3.10\""}
 ipykernel = "*"
 jinja2 = ">=3.0.3"
 jupyter-core = "*"
@@ -1395,6 +1437,7 @@ files = [
 
 [package.dependencies]
 babel = ">=2.10"
+importlib-metadata = {version = ">=4.8.3", markers = "python_version < \"3.10\""}
 jinja2 = ">=3.0.3"
 json5 = ">=0.9.0"
 jsonschema = ">=4.17.3"
@@ -1692,6 +1735,7 @@ files = [
 contourpy = ">=1.0.1"
 cycler = ">=0.10"
 fonttools = ">=4.22.0"
+importlib-resources = {version = ">=3.2.0", markers = "python_version < \"3.10\""}
 kiwisolver = ">=1.0.1"
 numpy = ">=1.20"
 packaging = ">=20.0"
@@ -1783,6 +1827,7 @@ files = [
 beautifulsoup4 = "*"
 bleach = "!=5.0.0"
 defusedxml = "*"
+importlib-metadata = {version = ">=3.6", markers = "python_version < \"3.10\""}
 jinja2 = ">=3.0"
 jupyter-core = ">=4.7"
 jupyterlab-pygments = "*"
@@ -2920,28 +2965,28 @@ files = [
 
 [[package]]
 name = "ruff"
-version = "0.0.256"
+version = "0.0.287"
 description = "An extremely fast Python linter, written in Rust."
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "ruff-0.0.256-py3-none-macosx_10_7_x86_64.whl", hash = "sha256:eb8e949f6e7fb16f9aa163fcc13318e2b7910577513468417e5b003b984410a1"},
-    {file = "ruff-0.0.256-py3-none-macosx_10_9_x86_64.macosx_11_0_arm64.macosx_10_9_universal2.whl", hash = "sha256:48a42f0ec4c5a3c3b062e947b2a5f8f7a4264761653fb0ee656a9b535ae6d8d7"},
-    {file = "ruff-0.0.256-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:36ca633cfc335869643a13e2006f13a63bc4cb94073aa9508ceb08a1e3afe3af"},
-    {file = "ruff-0.0.256-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:80fa5d3a40dd0b65c6d6adea4f825984d5d3a215a25d90cc6139978cb22ea1cd"},
-    {file = "ruff-0.0.256-py3-none-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:a0f88839b886db3577136375865bd080b9ed6f9b85bb990d897780e5a30ca3c2"},
-    {file = "ruff-0.0.256-py3-none-manylinux_2_17_ppc64.manylinux2014_ppc64.whl", hash = "sha256:fe6d77a43b2d52f45ee42f6f682198ed1c34cd0165812e276648981dfd50ad36"},
-    {file = "ruff-0.0.256-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:3878593507b281b2615702ece06426e8b27076e8fedf658bf0c5e1e5e2ad1b40"},
-    {file = "ruff-0.0.256-py3-none-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:9e052ec4d5c92663caa662b68fe1902ec10eddac2783229b1c5f20f3df62a865"},
-    {file = "ruff-0.0.256-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2116bd67e52ade9f90e5a3a3aa511a9b179c699690221bdd5bb267dbf7e94b22"},
-    {file = "ruff-0.0.256-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:3c6e93d7818a75669328e49a0f7070c40e18676ca8e56ca9c566633bef4d8d05"},
-    {file = "ruff-0.0.256-py3-none-musllinux_1_2_armv7l.whl", hash = "sha256:7ebb7de4e62d751b65bb15418a83ac5d555afb3eaa3ad549dea21744da34ae86"},
-    {file = "ruff-0.0.256-py3-none-musllinux_1_2_i686.whl", hash = "sha256:f310bfc76c0404a487759c8904f57bf51653c46e686c800efc1ff1d165a59a04"},
-    {file = "ruff-0.0.256-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:93a0cfec812b2ba57bff22b176901e0ddf44e4d42a9bd7da7ffb5e53df13fd6e"},
-    {file = "ruff-0.0.256-py3-none-win32.whl", hash = "sha256:d63e5320bc2d91e94925cd1863e381a48edf087041035967faf2614bb36a6a0d"},
-    {file = "ruff-0.0.256-py3-none-win_amd64.whl", hash = "sha256:859c8ffb1801895fe043a2b85a45cd0ff35667ddea4b465ba2a29d275550814a"},
-    {file = "ruff-0.0.256-py3-none-win_arm64.whl", hash = "sha256:64b276149e86c3d234608d3fe1da77535865e03debd3a1d5d04576f7f5031bbb"},
-    {file = "ruff-0.0.256.tar.gz", hash = "sha256:f9a96b34a4870ee8cf2f3779cd7854620d1788a83b52374771266cf800541bb7"},
+    {file = "ruff-0.0.287-py3-none-macosx_10_7_x86_64.whl", hash = "sha256:1e0f9ee4c3191444eefeda97d7084721d9b8e29017f67997a20c153457f2eafd"},
+    {file = "ruff-0.0.287-py3-none-macosx_10_9_x86_64.macosx_11_0_arm64.macosx_10_9_universal2.whl", hash = "sha256:e9843e5704d4fb44e1a8161b0d31c1a38819723f0942639dfeb53d553be9bfb5"},
+    {file = "ruff-0.0.287-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8ca1ed11d759a29695aed2bfc7f914b39bcadfe2ef08d98ff69c873f639ad3a8"},
+    {file = "ruff-0.0.287-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:1cf4d5ad3073af10f186ea22ce24bc5a8afa46151f6896f35c586e40148ba20b"},
+    {file = "ruff-0.0.287-py3-none-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:66d9d58bcb29afd72d2afe67120afcc7d240efc69a235853813ad556443dc922"},
+    {file = "ruff-0.0.287-py3-none-manylinux_2_17_ppc64.manylinux2014_ppc64.whl", hash = "sha256:06ac5df7dd3ba8bf83bba1490a72f97f1b9b21c7cbcba8406a09de1a83f36083"},
+    {file = "ruff-0.0.287-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:2bfb478e1146a60aa740ab9ebe448b1f9e3c0dfb54be3cc58713310eef059c30"},
+    {file = "ruff-0.0.287-py3-none-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:00d579a011949108c4b4fa04c4f1ee066dab536a9ba94114e8e580c96be2aeb4"},
+    {file = "ruff-0.0.287-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d3a810a79b8029cc92d06c36ea1f10be5298d2323d9024e1d21aedbf0a1a13e5"},
+    {file = "ruff-0.0.287-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:150007028ad4976ce9a7704f635ead6d0e767f73354ce0137e3e44f3a6c0963b"},
+    {file = "ruff-0.0.287-py3-none-musllinux_1_2_armv7l.whl", hash = "sha256:a24a280db71b0fa2e0de0312b4aecb8e6d08081d1b0b3c641846a9af8e35b4a7"},
+    {file = "ruff-0.0.287-py3-none-musllinux_1_2_i686.whl", hash = "sha256:2918cb7885fa1611d542de1530bea3fbd63762da793751cc8c8d6e4ba234c3d8"},
+    {file = "ruff-0.0.287-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:33d7b251afb60bec02a64572b0fd56594b1923ee77585bee1e7e1daf675e7ae7"},
+    {file = "ruff-0.0.287-py3-none-win32.whl", hash = "sha256:022f8bed2dcb5e5429339b7c326155e968a06c42825912481e10be15dafb424b"},
+    {file = "ruff-0.0.287-py3-none-win_amd64.whl", hash = "sha256:26bd0041d135a883bd6ab3e0b29c42470781fb504cf514e4c17e970e33411d90"},
+    {file = "ruff-0.0.287-py3-none-win_arm64.whl", hash = "sha256:44bceb3310ac04f0e59d4851e6227f7b1404f753997c7859192e41dbee9f5c8d"},
+    {file = "ruff-0.0.287.tar.gz", hash = "sha256:02dc4f5bf53ef136e459d467f3ce3e04844d509bc46c025a05b018feb37bbc39"},
 ]
 
 [[package]]
@@ -3165,6 +3210,7 @@ babel = ">=2.9"
 colorama = {version = ">=0.4.5", markers = "sys_platform == \"win32\""}
 docutils = ">=0.18.1,<0.21"
 imagesize = ">=1.3"
+importlib-metadata = {version = ">=4.8", markers = "python_version < \"3.10\""}
 Jinja2 = ">=3.0"
 packaging = ">=21.0"
 Pygments = ">=2.14"
@@ -3616,10 +3662,25 @@ docs = ["Sphinx (>=6.0)", "sphinx-rtd-theme (>=1.1.0)"]
 optional = ["python-socks", "wsaccel"]
 test = ["websockets"]
 
+[[package]]
+name = "zipp"
+version = "3.16.2"
+description = "Backport of pathlib-compatible object wrapper for zip files"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "zipp-3.16.2-py3-none-any.whl", hash = "sha256:679e51dd4403591b2d6838a48de3d283f3d188412a9782faadf845f298736ba0"},
+    {file = "zipp-3.16.2.tar.gz", hash = "sha256:ebc15946aa78bd63458992fc81ec3b6f7b1e92d51c35e6de1c3804e73b799147"},
+]
+
+[package.extras]
+docs = ["furo", "jaraco.packaging (>=9.3)", "jaraco.tidelift (>=1.4)", "rst.linker (>=1.9)", "sphinx (>=3.5)", "sphinx-lint"]
+testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "pytest (>=6)", "pytest-black (>=0.3.7)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-enabler (>=2.2)", "pytest-ignore-flaky", "pytest-mypy (>=0.9.1)", "pytest-ruff"]
+
 [extras]
 visualize = ["pygraphviz"]
 
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "f62cbf7c5177ff4825301c63488d1603209cdf672cdce723934300392a67c35f"
+content-hash = "18846cf8491efbd8b04dfe7cc41dc380e244a83c56f1fe1012e2f59b06035a17"
