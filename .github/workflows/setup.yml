@@ -23,7 +23,7 @@ jobs:
   setup:
     runs-on: ${{ inputs.os }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install poetry
         run: make PYTHON=python3 poetry-install
