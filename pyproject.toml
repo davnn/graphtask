@@ -47,7 +47,7 @@ stackeddag = "^0.3.4"
 visualize = ["pygraphviz"]
 
 [tool.poetry.group.dev.dependencies]
-ruff = "^0.0.256"
+ruff = "^0.1.5"
 typing-extensions = "^4.7.1"
 pyright = "^1.1.325"
 notebook = "^7.0.3"
